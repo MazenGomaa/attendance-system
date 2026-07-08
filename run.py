@@ -112,25 +112,47 @@ def ensure_venv():
 
 
 def cloudflared_target():
-    """Return (download_url, output_filename, archive_kind) for this platform."""
+    """
+    Return (download_url, output_filename, archive_kind) for this platform.
+
+    Verified against the actual release assets on cloudflare/cloudflared:
+      Windows : cloudflared-windows-{amd64|386}.exe  (no arm64 binary — use amd64)
+      macOS   : cloudflared-darwin-{amd64|arm64}.tgz
+      Linux   : cloudflared-linux-{amd64|arm64|armhf|arm|386}
+    """
     sysname = platform.system().lower()
     arch = platform.machine().lower()
+
+    if sysname == "windows":
+        # No Windows ARM64 binary exists; Windows ARM can run amd64 via emulation.
+        a = "amd64" if arch in ("x86_64", "amd64", "aarch64", "arm64") else "386"
+        return CF_RELEASE + f"cloudflared-windows-{a}.exe", "cloudflared.exe", None
+
+    if sysname == "darwin":
+        a = "arm64" if arch in ("aarch64", "arm64") else "amd64"
+        return CF_RELEASE + f"cloudflared-darwin-{a}.tgz", "cloudflared", "tgz"
+
+    # Linux and Android/Termux
     if arch in ("x86_64", "amd64"):
         a = "amd64"
     elif arch in ("aarch64", "arm64"):
         a = "arm64"
     elif arch.startswith("armv") or arch == "arm":
-        a = "arm"
+        # armhf (hard-float) covers ARMv7+ — Raspberry Pi 2/3/4, modern Android ARM32.
+        # arm (soft-float) is the fallback for ARMv6 and older (e.g. Pi Zero W).
+        # sysconfig reports "gnueabihf" in HOST_GNU_TYPE when Python itself was built
+        # for hard-float, which is the most reliable signal available at runtime.
+        try:
+            import sysconfig
+            host = sysconfig.get_config_var("HOST_GNU_TYPE") or ""
+            a = "armhf" if "gnueabihf" in host else "arm"
+        except Exception:
+            # Fallback: ARMv7 and above always use hard-float in practice.
+            a = "armhf" if arch.startswith("armv7") else "arm"
     elif arch in ("i386", "i686", "x86"):
         a = "386"
     else:
         a = arch
-    if sysname == "windows":
-        return CF_RELEASE + f"cloudflared-windows-{a}.exe", "cloudflared.exe", None
-    if sysname == "darwin":
-        # macOS releases ship as a .tgz containing the binary.
-        return CF_RELEASE + f"cloudflared-darwin-{a}.tgz", "cloudflared", "tgz"
-    # Linux and Android/Termux: a static Go ELF binary runs on both.
     return CF_RELEASE + f"cloudflared-linux-{a}", "cloudflared", None
 
 
