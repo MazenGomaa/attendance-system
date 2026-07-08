@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Admin login</title>
+<style>
+  :root { --bg:#0b0e14; --panel:#141a24; --line:#222c3a; --fg:#e7edf5; --mut:#8a99ab; --acc:#5b9dff; --err:#ff5a5f; }
+  * { box-sizing:border-box; }
+  body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+         background:var(--bg); color:var(--fg); font-family:ui-monospace,Menlo,Consolas,monospace; padding:16px; }
+  .card { width:100%; max-width:360px; background:var(--panel); border:1px solid var(--line);
+          border-radius:14px; padding:26px; }
+  h1 { font-size:1rem; letter-spacing:.04em; text-transform:uppercase; color:var(--mut); margin:0 0 18px; }
+  input { width:100%; padding:13px; font-size:1rem; border-radius:9px; border:1px solid var(--line);
+          background:#0b0e14; color:var(--fg); font-family:inherit; }
+  input:focus { outline:none; border-color:var(--acc); }
+  button { width:100%; margin-top:14px; padding:13px; font-size:1rem; font-weight:600; border:0;
+           border-radius:9px; background:var(--acc); color:#fff; cursor:pointer; }
+  #err { color:var(--err); font-size:.85rem; margin-top:12px; min-height:1em; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>Admin login</h1>
+    <input id="pw" type="password" placeholder="Admin password" autofocus>
+    <button id="go">Enter</button>
+    <div id="err"></div>
+  </div>
+<script>
+  const pw = document.getElementById('pw'), err = document.getElementById('err');
+  async function login() {
+    err.textContent = '';
+    try {
+      const r = await fetch('/admin/login', { method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pw: pw.value }) });
+      if (r.ok) { location.href = '/admin'; }   // cookie set; reload into console
+      else { err.textContent = 'Wrong password'; pw.value=''; pw.focus(); }
+    } catch (e) { err.textContent = 'Connection error'; }
+  }
+  document.getElementById('go').addEventListener('click', login);
+  pw.addEventListener('keydown', e => { if (e.key === 'Enter') login(); });
+</script>
+</body>
+</html>

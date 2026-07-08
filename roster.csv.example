@@ -1,0 +1,6 @@
+# Rename this file to roster.csv to enable roster validation.
+# One student ID per line. Anything after a comma (e.g. a name) is ignored.
+20231001,محمد علي حسن إبراهيم
+20231002,احمد سعد خالد يوسف
+20231003
+20231004

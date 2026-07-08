@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+*.egg-info/
+
+# Runtime-generated files
+cloudflared
+cloudflared.exe
+qr_*.png
+exports/*.csv
+.deps_installed
+
+# Secrets / editor noise
+.env
+*.local
+.DS_Store
+Thumbs.db
+
+# Claude Code session files
+.claude/
