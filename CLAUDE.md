@@ -5,14 +5,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Running the app
 
 ```bash
-# Install dependencies (into the bundled .venv or a fresh venv)
-pip install -r requirements.txt
+# Windows (also works: double-click run.bat)
+python run.py
 
-# Launch (interactive CLI prompts for course name, geofence, tunnels, etc.)
-python main.py
+# Linux / macOS (also works: ./run.sh)
+python3 run.py
 ```
 
-There are no tests and no build step. The app starts, asks a few config questions, then serves on port 8000 (overridden by `PORT` env var).
+`run.py` is the only entry point. On first run it checks Python 3.9+, creates `.venv`, installs deps from `requirements.txt`, and auto-downloads the correct `cloudflared` binary for the current OS/CPU. Subsequent runs detect and prompt to fix any missing packages, then launch immediately.
+
+Do **not** run `main.py` directly unless the venv is already activated — it has no bootstrap logic. There are no tests and no build step. The app serves on port 8000 (overridden by `PORT` env var).
 
 ## Architecture
 
@@ -29,7 +31,12 @@ Three Python files do everything; no database, no migrations, no build pipeline.
 - `/admin/*`: state read, reset-devices, new-session, export, download. Admin access is gated by `_check_admin()` which checks password cookie/header first, then falls back to loopback/trusted-CIDR check when no password is set.
 - Lifespan hook: exports CSVs on shutdown (Ctrl+C).
 
-**`main.py`** — launcher only:
+**`run.py`** — cross-platform bootstrap (the real entry point):
+- Checks Python ≥ 3.9, creates `.venv`, installs deps, auto-downloads `cloudflared`.
+- On subsequent runs: detects missing packages and offers to install them.
+- Delegates to `main.py` via `subprocess.call([venv_python, "main.py"])`.
+
+**`main.py`** — session launcher (called by `run.py`):
 - Interactive CLI prompts → populates `config` fields.
 - Optionally starts 1–4 Cloudflare Quick Tunnels (`cloudflared` binary, found via PATH or next to `main.py`).
 - Generates QR codes (ASCII + PNG via `qrcode[pil]`).

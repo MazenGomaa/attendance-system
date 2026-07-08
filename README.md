@@ -22,7 +22,9 @@ pkg install python
 python run.py
 ```
 
-`run.py` handles everything on first run: creates a private `.venv`, installs dependencies, downloads the correct `cloudflared` binary, then starts the server. Subsequent runs skip setup and launch immediately.
+`run.py` handles everything automatically:
+- **First run:** creates a private `.venv`, installs all dependencies, downloads the correct `cloudflared` binary for your OS and CPU.
+- **Subsequent runs:** checks for any missing packages (and offers to install them), then launches immediately.
 
 ---
 
@@ -35,7 +37,7 @@ python run.py
 3. Answer the startup prompts (see [Configuration](#configuration)).
 4. Share the QR code or tunnel URL with students.
 
-No global installs. Everything lives inside `.venv` in the project folder.
+No global installs. Everything lives inside `.venv` in the project folder. To rebuild from scratch, delete `.venv` and re-run `run.py`.
 
 ### Termux (Android)
 
