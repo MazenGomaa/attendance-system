@@ -169,13 +169,9 @@ def have_cloudflared() -> bool:
 def ensure_cloudflared():
     if have_cloudflared():
         return
-    print("[setup] cloudflared not found (needed for public QR-code tunnel URLs).")
-    if not _ask_yes("[setup] Download cloudflared now?"):
-        print("[setup] Skipping — the server will run LAN-only.")
-        return
     url, outname, kind = cloudflared_target()
     out = os.path.join(HERE, outname)
-    print(f"[setup] downloading cloudflared …\n        {url}")
+    print(f"[setup] downloading cloudflared (first run only) …\n        {url}")
     try:
         if kind == "tgz":
             tmp = tempfile.mktemp(suffix=".tgz")
