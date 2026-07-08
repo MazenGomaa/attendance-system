@@ -1,5 +1,7 @@
 # Attendance System
 
+> Built entirely by [Claude](https://claude.ai) (Anthropic's AI assistant) via [Claude Code](https://claude.ai/code).
+
 A lightweight, self-hosted attendance tool built for Arabic-speaking university classrooms. Students scan a QR code on their phone, enter their name and student ID, and the professor gets a live count and a downloadable CSV — no accounts, no cloud service, no database.
 
 Handles up to ~1 000 simultaneous students via Cloudflare Quick Tunnels (free, no account needed).
