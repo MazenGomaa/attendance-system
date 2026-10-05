@@ -77,16 +77,53 @@ def _missing_packages() -> list:
     return missing
 
 
+# Termux/Android: PyPI has no prebuilt wheels for this platform, so anything
+# with native code compiles from source. Install only the lean set (no
+# uvicorn[standard] → uvloop/httptools/watchfiles, no Pillow); pydantic-core
+# still needs Rust (`pkg install rust binutils`).
+TERMUX_PACKAGES = ["fastapi", "uvicorn", "qrcode", "python-multipart"]
+
+
+def is_termux() -> bool:
+    return "com.termux" in os.environ.get("PREFIX", "") or hasattr(sys, "getandroidapilevel")
+
+
+def _termux_env() -> dict:
+    from shutil import which
+    if not which("rustc"):
+        print("[setup] Rust is required to build pydantic-core on Termux. Run:")
+        print("          pkg install rust binutils")
+        print("        then re-run:  python run.py")
+        sys.exit(1)
+    env = dict(os.environ)
+    if "ANDROID_API_LEVEL" not in env:
+        try:
+            level = str(sys.getandroidapilevel())
+        except AttributeError:
+            level = subprocess.run(["getprop", "ro.build.version.sdk"],
+                                   capture_output=True, text=True).stdout.strip() or "24"
+        env["ANDROID_API_LEVEL"] = level
+    return env
+
+
 def _install_deps():
     req = os.path.join(HERE, "requirements.txt")
+    termux = is_termux()
+    env = _termux_env() if termux else None
     print("[setup] installing dependencies (may take a minute on first run) …")
+    if termux:
+        print("[setup] Termux detected: compiling pydantic-core from source, "
+              "this can take 10-30 min. Keep Termux open (termux-wake-lock).")
     try:
         subprocess.check_call(
             [venv_python(), "-m", "pip", "install", "--upgrade", "pip", "--quiet"]
         )
     except Exception:
         pass  # pip upgrade is best-effort
-    subprocess.check_call([venv_python(), "-m", "pip", "install", "-r", req])
+    if termux:
+        subprocess.check_call([venv_python(), "-m", "pip", "install", *TERMUX_PACKAGES], env=env)
+    else:
+        subprocess.check_call([venv_python(), "-m", "pip", "install", "-r", req])
     open(MARK, "w").close()
     print("[setup] dependencies installed.")
 
