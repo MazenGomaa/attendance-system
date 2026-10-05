@@ -79,9 +79,9 @@ def _missing_packages() -> list:
 
 # Termux/Android: PyPI has no prebuilt wheels for this platform, so anything
 # with native code compiles from source. Install only the lean set (no
-# uvicorn[standard] → uvloop/httptools/watchfiles, no Pillow); pydantic-core
-# still needs Rust (`pkg install rust binutils`).
-TERMUX_PACKAGES = ["fastapi", "uvicorn", "qrcode", "python-multipart"]
+# uvicorn[standard] → uvloop/httptools/watchfiles, no Pillow; pure-Python pypng
+# writes the QR PNGs instead); pydantic-core still needs Rust (`pkg install rust binutils`).
+TERMUX_PACKAGES = ["fastapi", "uvicorn", "qrcode", "pypng", "python-multipart"]
 
 
 def is_termux() -> bool:
@@ -182,7 +182,8 @@ def cloudflared_target():
         try:
             import sysconfig
             host = sysconfig.get_config_var("HOST_GNU_TYPE") or ""
-            a = "armhf" if "gnueabihf" in host else "arm"
+            # Android (Termux) reports "androideabi"; it is always hard-float.
+            a = "armhf" if ("gnueabihf" in host or "android" in host) else "arm"
         except Exception:
             # Fallback: ARMv7 and above always use hard-float in practice.
             a = "armhf" if arch.startswith("armv7") else "arm"

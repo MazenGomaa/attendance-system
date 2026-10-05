@@ -1,7 +1,7 @@
 # PC (Windows/Linux/macOS) stack — all install as prebuilt wheels, no compiling.
 # [standard] adds uvloop + httptools (faster, though the tunnel is the real
 # bottleneck); [pil] adds Pillow so QR codes also save as projectable PNG images.
-# On Termux/Android instead use the lean set (see INSTALL.md): drop both extras.
+# On Termux/Android instead use the lean set (run.py does this automatically; see README → Termux): drop both extras.
 fastapi>=0.110
 uvicorn[standard]>=0.29
 qrcode[pil]>=7.4

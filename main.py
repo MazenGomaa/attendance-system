@@ -112,7 +112,16 @@ def save_qr(url: str, label: str):
     here = os.path.dirname(os.path.abspath(__file__))
     path = os.path.join(here, f"qr_{label.lower().replace(' ', '_')}.png")
     try:
-        qr.make_image().save(path)
+        try:
+            qr.make_image().save(path)
+        except ImportError:
+            # Lean install (e.g. Termux) has no Pillow: use pure-Python pypng.
+            from qrcode.image.pure import PyPNGImage
+            qr.make_image(image_factory=PyPNGImage).save(path)
+    except ImportError:
+        print("[qr] PNG not saved (neither Pillow nor pypng installed) — "
+              "scan the QR above or share the URL.")
+        path = None
     except Exception:
         path = None
     return path
