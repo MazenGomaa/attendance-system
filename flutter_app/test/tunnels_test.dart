@@ -12,6 +12,19 @@ void main() {
         'on [::1]:53: connection refused'), isNull);
   });
 
+  test('filters cloudflared noise but keeps what matters', () {
+    // Real lines from a Samsung SM-S928B (Android 16) run.
+    const ts = '2026-10-06T22:10:49Z';
+    const dnsNoise = '$ts ERR Failed to initialize DNS local resolver error="lookup '
+        'region1.v2.argotunnel.com on [::1]:53: connection refused"';
+    expect(isHarmlessCfLine(dnsNoise), isTrue);
+    expect(isInterestingCfLine(dnsNoise), isFalse);
+    expect(isInterestingCfLine('$ts INF |  https://a-b.trycloudflare.com  |'), isTrue);
+    expect(isInterestingCfLine('$ts INF Registered tunnel connection connIndex=0'), isTrue);
+    expect(isInterestingCfLine('$ts ERR Connection terminated connIndex=0'), isTrue);
+    expect(isInterestingCfLine('$ts INF |  DNS Resolution  region1  PASS  |'), isFalse);
+  });
+
   test('starts a fake cloudflared, reads its URL, restarts it when it dies', () async {
     final dir = await Directory.systemTemp.createTemp('cf');
     final fake = File('${dir.path}/cloudflared');

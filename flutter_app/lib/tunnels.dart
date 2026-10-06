@@ -14,6 +14,34 @@ final RegExp tunnelUrlPattern =
 
 String? parseTunnelUrl(String line) => tunnelUrlPattern.firstMatch(line)?.group(0);
 
+/// cloudflared lines that are expected on Android and harmless: a few optional
+/// features use Go's built-in resolver, which looks for a DNS server at
+/// [::1]:53 because Android has no /etc/resolv.conf; they just turn
+/// themselves off. Tunnel traffic itself resolves fine (its own precheck says
+/// "DNS Resolution PASS"). ICMP proxying needs a sysctl apps can't read.
+const _knownHarmless = [
+  'Failed to initialize DNS local resolver',
+  'Failed to fetch features',
+  'ping_group_range',
+];
+
+bool isHarmlessCfLine(String line) => _knownHarmless.any(line.contains);
+
+/// cloudflared is chatty (banners, precheck tables). Keep only lines worth
+/// reading in the on-screen log: errors/warnings that matter, the URL,
+/// connection changes, and shutdown.
+bool isInterestingCfLine(String line) {
+  if (isHarmlessCfLine(line)) return false;
+  return line.contains(' ERR ') ||
+      line.contains(' WRN ') ||
+      line.contains('trycloudflare.com') ||
+      line.contains('Registered tunnel connection') ||
+      line.contains('Unregistered tunnel connection') ||
+      line.contains('Retrying') ||
+      line.contains('Tunnel server stopped') ||
+      line.contains('Version ');
+}
+
 enum TunnelState { starting, up, restarting, failed, stopped }
 
 class Tunnel {
@@ -77,14 +105,17 @@ class TunnelManager extends ChangeNotifier {
           environment: {'HOME': homeDir}, workingDirectory: homeDir);
       t.process = p;
       void onLine(String line) {
-        log('cf${t.index}', line);
+        // Everything goes to the session log file; the screen gets the gist.
+        logToFileOnly('cf${t.index}', line);
+        if (isInterestingCfLine(line)) log('cf${t.index}', line);
         final url = parseTunnelUrl(line);
         if (url != null && t.url == null) {
           t.url = url;
           t.state = TunnelState.up;
           log('tunnel${t.index}', 'URL: $url');
           notifyListeners();
-        } else if (line.contains(' ERR ') || line.contains('failed')) {
+        } else if ((line.contains(' ERR ') || line.contains('failed')) &&
+            !isHarmlessCfLine(line)) {
           t.lastError = line.trim();
           notifyListeners();
         }

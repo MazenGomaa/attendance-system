@@ -60,6 +60,9 @@ class HostController extends ChangeNotifier {
     try {
       await HostPlatform.requestNotifications();
       final paths = await HostPlatform.paths();
+      final logDir = Directory('${paths['filesDir']}/logs')..createSync(recursive: true);
+      final stamp = DateTime.now().toIso8601String().substring(0, 19).replaceAll(':', '-');
+      DebugLog.instance.openFile('${logDir.path}/session-$stamp.log');
       binaryPath = '${paths['nativeLibDir']}/libcloudflared.so';
       final bin = File(binaryPath!);
       log('app', 'cloudflared: $binaryPath '
@@ -338,7 +341,7 @@ Future<void> shareQrs(List<(String, String)> items) async {
     }
     await SharePlus.instance.share(ShareParams(
       files: files,
-      text: items.map((e) => '${e.$2}: ${e.$1}').join('\n'),
+      text: items.map((e) => '${e.$2}: ${e.$1}').join('\n\n'),
     ));
     log('qr', 'shared ${files.length} QR image(s)');
   } catch (e) {
@@ -459,6 +462,7 @@ class _DebugPageState extends State<DebugPage> {
     c.device.forEach((k, v) => b.writeln('$k: $v'));
     b.writeln('cloudflared: ${c.binaryPath ?? '(not started)'}');
     b.writeln('cloudflared version: $binaryVersion');
+    b.writeln('full log file: ${DebugLog.instance.filePath ?? '(none yet)'}');
     for (final t in c.tunnels?.tunnels ?? const <Tunnel>[]) {
       b.writeln('tunnel ${t.index}: ${t.state.name} url=${t.url} restarts=${t.restarts} '
           'checks ok=${t.checksOk} failed=${t.checksFailed} lastError=${t.lastError}');
