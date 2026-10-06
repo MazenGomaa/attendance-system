@@ -17,7 +17,7 @@
            background:#1c2533; color:var(--fg); cursor:pointer; font-family:inherit; }
   button:hover { border-color:var(--acc); }
   button.danger:hover { border-color:var(--err); color:var(--err); }
-  .grid { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin:16px 0; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:12px; margin:16px 0; }
   .stat { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px; }
   .stat .n { font-size:2rem; font-weight:700; }
   .stat .l { color:var(--mut); font-size:.75rem; text-transform:uppercase; }
@@ -32,6 +32,10 @@
   .pill { padding:2px 8px; border-radius:20px; font-size:.72rem; }
   .pill.warn { background:rgba(255,176,32,.16); color:var(--warn); }
   .pill.ok { background:rgba(52,199,89,.16); color:var(--ok); }
+  .pill.err { background:rgba(255,90,95,.16); color:var(--err); }
+  .stat.alert .n { color:var(--err); }
+  td.out { color:var(--err); font-weight:700; }
+  .hint { color:var(--mut); font-size:.75rem; }
   .empty { color:var(--mut); font-size:.85rem; padding:8px 0; }
   #toast { position:fixed; bottom:20px; left:50%; transform:translateX(-50%);
            background:#1c2533; border:1px solid var(--line); padding:12px 18px; border-radius:10px;
@@ -53,96 +57,34 @@
   <div class="grid">
     <div class="stat"><div class="n" id="count">0</div><div class="l">Submissions</div></div>
     <div class="stat"><div class="n" id="devices">0</div><div class="l">Students</div></div>
-    <div class="stat"><div class="n" id="mergeN">0</div><div class="l">Merges/overwrites</div></div>
+    <div class="stat"><div class="n" id="mergeN">0</div><div class="l">Edits / conflicts</div></div>
+    <div class="stat" id="oobStat" style="display:none"><div class="n" id="oob">0</div><div class="l">Out of bounds</div></div>
+    <div class="stat"><div class="n" id="sharedIp">0</div><div class="l">On a shared IP</div></div>
   </div>
 
   <div class="bar">
-    <button id="dl">⬇ Download CSV</button>
+    <button id="dl">⬇ Final CSV</button>
+    <button id="dlRaw">⬇ Raw log (every submission)</button>
+    <button id="dlAudit" style="display:none">⬇ Audited CSV</button>
     <button id="export">Export snapshot</button>
     <button class="danger" id="reset">Reset for new take</button>
     <button class="danger" id="newsess">New subject…</button>
   </div>
 
-  <h2>⚠️ Merged / overwritten on the same device (review for cheating)</h2>
+  <h2>⚠️ Edits and refused ID conflicts (review for cheating)</h2>
   <table>
-    <thead><tr><th>Time</th><th>Was</th><th>Replaced by</th><th>IP</th><th>Apart</th><th>Type</th></tr></thead>
+    <thead><tr><th>Time</th><th>Was</th><th>Now / attempted</th><th>IP</th><th>Moved</th><th>Type</th></tr></thead>
     <tbody id="merges"></tbody>
   </table>
 
-  <h2>Recent submissions</h2>
+  <h2>Recent submissions <span class="hint">(last 30 · distance from the median hall position)</span></h2>
   <table>
-    <thead><tr><th>Name</th><th>ID</th><th>Time</th></tr></thead>
+    <thead><tr><th>Name</th><th>ID</th><th>Time</th><th>Distance</th></tr></thead>
     <tbody id="rows"></tbody>
   </table>
 </div>
 <div id="toast"></div>
 
-<script>
-  const $ = id => document.getElementById(id);
-  function toast(t){ const e=$('toast'); e.textContent=t; e.classList.add('show'); setTimeout(()=>e.classList.remove('show'),2400); }
-  function esc(s){ const d=document.createElement('div'); d.textContent=String(s); return d.innerHTML; }
-
-  let refreshing = false;
-  async function refresh() {
-    if (refreshing) return;
-    refreshing = true;
-    try {
-      const r = await fetch('/admin/state');
-      if (r.status === 401 || r.status === 403) { location.href = '/admin'; return; }
-      if (!r.ok) { return; }
-      const d = await r.json();
-      $('count').textContent = d.count;
-      $('devices').textContent = d.devices;
-      $('mergeN').textContent = d.merges.length;
-      $('session').textContent = 'Session: ' + d.session_id + '  ·  Course: ' + d.course;
-      if (d.geofence) { $('geoPanel').style.display = 'block'; $('rad').textContent = d.audit_radius_km; }
-
-      $('rows').innerHTML = d.recent.map(x =>
-        `<tr><td class="ar">${esc(x.name)}${x.edited?' <span style="color:#ffb020">✎</span>':''}${x.gps?' 📍':''}</td>`
-        + `<td>${esc(x.id)}</td><td>${esc(x.timestamp).replace('T',' ')}</td></tr>`).join('')
-        || '';
-
-      const m = d.merges;
-      $('merges').innerHTML = m.length ? m.map(e => {
-        const apart = (e.dist_m==null) ? '—' : (esc(e.dist_m) + ' m');
-        const type = e.same_student
-          ? '<span class="pill ok">same student</span>'
-          : '<span class="pill warn">different student</span>';
-        return `<tr><td>${esc(e.time).replace('T',' ')}</td>`
-          + `<td class="ar">${esc(e.old_id)} · ${esc(e.old_name)}</td>`
-          + `<td class="ar">${esc(e.new_id)} · ${esc(e.new_name)}</td>`
-          + `<td>${esc(e.ip)}</td><td>${apart}</td><td>${type}</td></tr>`;
-      }).join('') : '<tr><td colspan="6" class="empty">No same-device overwrites yet.</td></tr>';
-    } catch (e) {}
-    finally { refreshing = false; }
-  }
-
-  $('dl').addEventListener('click', () => { window.location = '/admin/download'; });
-  $('export').addEventListener('click', async () => {
-    try {
-      const d = await (await fetch('/admin/export', { method:'POST' })).json();
-      toast('Exported: ' + d.raw + (d.audited ? ' + ' + d.audited : ''));
-    } catch (e) { toast('Export failed — check server'); }
-  });
-  $('reset').addEventListener('click', async () => {
-    if (!confirm('Clear device/IP locks and reset cookies? Records are kept; everyone can submit again.')) return;
-    try {
-      await fetch('/admin/reset-devices', { method:'POST' });
-      toast('Reset done'); refresh();
-    } catch (e) { toast('Reset failed — check server'); }
-  });
-  $('newsess').addEventListener('click', async () => {
-    const name = prompt('New subject name (current data will be exported first):');
-    if (name === null) return;
-    try {
-      const d = await (await fetch('/admin/new-session', {
-        method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ course: name }) })).json();
-      toast('Saved ' + d.exported + ' · now: ' + d.course); refresh();
-    } catch (e) { toast('New session failed — check server'); }
-  });
-
-  refresh();
-  setInterval(refresh, 2000);
-</script>
+<script src="/static/admin.js"></script>
 </body>
 </html>

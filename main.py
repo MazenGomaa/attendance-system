@@ -212,8 +212,6 @@ def main():
 
     course = input("Course / subject name: ").strip() or "Session"
     geo = input("Require location access + GPS audit at export? [y/N]: ").strip().lower()
-    ipid = input("Treat one IP as one device (stops browser-switching to submit\n"
-                 "twice; may collide if students share a mobile-carrier IP) [Y/n]: ").strip().lower()
     try:
         ntun = int(input("How many Cloudflare tunnels to open (1-4, more = more "
                          "concurrent capacity) [2]: ").strip() or "2")
@@ -243,7 +241,6 @@ def main():
             config.audit_radius_km = max(0.05, rad)
         except ValueError:
             config.audit_radius_km = 0.5
-    config.ip_identity = (ipid != "n")
     config.ip_tracking = False
     config.tunnel_count = ntun
     config.roster = load_roster()

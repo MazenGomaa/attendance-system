@@ -77,13 +77,12 @@ Copy the folder. If the OS or CPU architecture changes, delete `.venv` and the `
 
 ## Configuration
 
-`run.py` → `main.py` asks six questions at startup:
+`run.py` → `main.py` asks five questions at startup:
 
 | Prompt | Default | Notes |
 |--------|---------|-------|
 | Course / subject name | `Session` | Used in exported filenames |
 | Require location + GPS audit? | `N` | When `y`, students must allow location; a post-session audit CSV is written |
-| Treat one IP as one device? | `Y` | Blocks browser-switching to submit twice; safe for CGNAT when GPS is off |
 | Number of Cloudflare tunnels (1–4) | `2` | Each tunnel adds ~200 concurrent slots; 2 tunnels ≈ 400 students |
 | Allow admin from another device on your network? | `N` | Enables admin access from e.g. a tablet on the same hotspot |
 | Admin password | *(blank)* | Blank = no password, localhost-only admin; set one when using a shared network |
@@ -124,15 +123,17 @@ Open `http://localhost:8000/admin` on the host machine (or the admin URL printed
 
 | Button | Action |
 |--------|--------|
-| Download CSV | Exports and downloads the current session's CSV |
-| Export snapshot | Writes a CSV to `exports/` without downloading |
+| Final CSV | Exports and downloads one row per student |
+| Raw log | Exports and downloads every submission (creates, edits, refused conflicts) |
+| Audited CSV | Final + distance and status flags (shown when geofencing is on) |
+| Export snapshot | Writes all CSVs to `exports/` without downloading |
 | Reset for new take | Clears device locks so everyone can re-submit (records are kept) |
 | New subject… | Exports current session, clears all records, starts a new session |
 
 The dashboard auto-refreshes every 2 s and shows:
-- Live submission / student / merge counts
-- The 15 most recent submissions
-- A merge log flagging any same-device overwrites for cheating review
+- Live counts: submissions, students, edits/conflicts, out of bounds (geofence on), students on a shared IP
+- The 30 most recent submissions with their distance from the median hall position (out-of-bounds in red)
+- Every edit (labelled *same student*, *ID corrected*, *name corrected* or *different student*) and every refused attempt to use an ID that's already registered
 
 Press **Ctrl+C** to stop the server; a final CSV is exported automatically on shutdown.
 
@@ -151,11 +152,12 @@ Press **Ctrl+C** to stop the server; a final CSV is exported automatically on sh
 ├── requirements.txt   # Python dependencies
 ├── roster.csv.example # Example roster format
 ├── static/
-│   ├── index.html     # Student submission form (RTL Arabic)
-│   ├── admin.html     # Admin dashboard
-│   └── login.html     # Admin login (shown when a password is set)
+│   ├── index.html/.js # Student submission form (RTL Arabic)
+│   ├── admin.html/.js # Admin dashboard
+│   └── login.html/.js # Admin login (shown when a password is set)
 └── exports/           # CSV output (created on first run)
-    ├── <session>_Raw.csv
+    ├── <session>_Raw.csv       # every submission, in order
+    ├── <session>_Final.csv     # one row per student
     └── <session>_Audited.csv   # only when geofencing is on
 ```
 
@@ -170,12 +172,13 @@ Three Python files handle everything — no database, no migrations, no build pi
 **`state.py`** holds two process-wide singletons:
 
 - `Config` — session metadata, feature flags, and secrets. Set at startup by `main.py`; never written to disk.
-- `Store` — five in-memory structures:
+- `Store` — in-memory structures:
   - `records` — the master list of attendance records (append-only during a session)
   - `rid_index` — `rid → record` dict for O(1) lookup
   - `client_to_rid` — `deviceId / cookie-UUID → rid` (browser identity)
   - `id_to_rid` — `student ID → rid` (authoritative dedup key)
-  - `ip_to_rids` — `IP → [rid, …]` (CGNAT-aware, multiple rids per IP)
+  - `ip_to_rids` — `IP → [rid, …]` (CGNAT-aware, multiple rids per IP; used for flags only)
+  - `log` — append-only history of every submission (what the Raw CSV exports)
 
 **`app.py`** is the Starlette application (plain Starlette rather than FastAPI, so there's no pydantic and nothing to compile):
 
@@ -187,13 +190,14 @@ Three Python files handle everything — no database, no migrations, no build pi
 
 ### Identity and deduplication
 
-A submission is matched to an existing record in priority order:
+A submission is matched to an existing record in this order:
 
-1. **deviceId** (localStorage) or **cookie UUID** — same browser, strongest signal.
-2. **IP + GPS proximity** (≤ 3 m) — catches a browser-switch on the same physical phone. Without GPS this path is skipped to avoid merging multiple students sharing a mobile carrier NAT.
-3. **Student ID** — used after a "Reset for new take" (device locks cleared but records kept), so the student updates their existing record rather than creating a duplicate.
+1. **deviceId** (localStorage) or **cookie UUID** — same browser. The student can edit their name or ID freely.
+2. **Student ID + name** — a different browser (or after "Reset for new take") re-submitting an ID that already exists. Accepted as the same student only if the name matches too (spelling variants like أ/ا, ة/ه, ى/ي and diacritics are ignored). A different name is **refused**, logged, and shown on the admin page, so nobody can overwrite another student's record by typing their ID.
 
 A new record is created only when no match is found.
+
+A shared IP or nearby GPS position is **never** used to merge records: phones on one carrier/tower share an IP, and indoor GPS often reports the same spot, so merging silently overwrote classmates. These cases are flagged instead (`SameIP_IDs` in the Final/Audited CSVs, "shared IP" on the dashboard).
 
 ### Cloudflare Quick Tunnels
 
@@ -211,31 +215,49 @@ Location is **not** checked in real time. Instead, every student's GPS coordinat
 - **Admin login throttle** — 5 attempts per 60 s per IP.
 - **Admin password** — SHA-256(salt + password), constant-time compare. Salt and hash live in process memory only.
 - **IP validation** — forwarding headers (`CF-Connecting-IP`, `X-Forwarded-For`) are only trusted when the direct TCP peer is loopback (i.e. the cloudflared process), preventing LAN clients from spoofing their IP.
-- **XSS protection** — all server-supplied values interpolated into admin dashboard HTML are escaped via a `textContent`-based helper.
-- **Security headers** — `X-Content-Type-Options`, `X-Frame-Options: DENY`, `Referrer-Policy`, and a `Content-Security-Policy` are set on every response.
+- **XSS protection** — all server-supplied values interpolated into admin dashboard HTML are escaped via a `textContent`-based helper; the student page only uses `textContent`. Scripts live in `static/*.js` so the CSP forbids inline scripts (`script-src 'self'`).
+- **CSRF** — admin POSTs must carry `X-Requested-With: att-admin`, which a cross-site page can't send without a CORS preflight the server never approves. The admin cookie is `SameSite=Strict`.
+- **DNS rebinding** — password-less (loopback / trusted network) admin access requires the `Host` to be `localhost` or an IP address, so a malicious domain re-pointed at 127.0.0.1 can't read the dashboard.
+- **Request limits** — POST bodies over 16 KB are refused (counted as they arrive, so chunked uploads can't bypass it); `deviceId` must be 8–64 safe characters; throttle tables prune themselves.
+- **CSV injection** — text cells starting with `= + - @` are prefixed with `'` so spreadsheets don't execute them.
+- **Security headers** — `X-Content-Type-Options`, `X-Frame-Options: DENY`, `Referrer-Policy`, `Permissions-Policy`, a strict `Content-Security-Policy` (`frame-ancestors 'none'`, `object-src 'none'`, `base-uri 'none'`), and `Cache-Control: no-store` on non-static responses.
 
 ### Export format
 
-**`<session>_Raw.csv`** — one row per student:
+**`<session>_Raw.csv`** — every submission in order, including ones an edit later replaced and refused ID conflicts. Use it to check whether anything was overwritten:
 
 | Column | Description |
 |--------|-------------|
-| Name | Arabic full name |
-| ID | Student ID |
-| Submitted_At | First submission timestamp |
-| Last_Updated | Timestamp of last edit (blank if never edited) |
-| Latitude | GPS latitude (blank if geofence off) |
-| Longitude | GPS longitude |
-| Accuracy_m | GPS accuracy radius in metres |
+| Seq, Time | Order and timestamp |
+| Action | `created`, `updated`, or `refused` |
+| Match | How it was matched: `new`, `device`, `same ID + name`, `ID in use` |
+| Record | Short record id; rows with the same value are the same student record |
+| Name, ID | What was submitted |
+| Prev_Name, Prev_ID | What the record held before this edit (or the existing owner for a refused ID) |
+| Latitude, Longitude, Accuracy_m, Maps_Link | GPS (blank if geofence off); `Maps_Link` opens the spot in Google Maps |
 | IP | Client IP address |
+| Device | Short hash of the browser's deviceId (same value = same browser) |
+| Note | e.g. `ID corrected`, `different student`, `same IP as 1001` |
 
-**`<session>_Audited.csv`** — same columns plus:
+**`<session>_Final.csv`** — one row per student (current values):
+
+| Column | Description |
+|--------|-------------|
+| Name, ID | Arabic full name, student ID |
+| Submitted_At, Last_Updated | First submission; last edit (blank if never edited) |
+| Edits | Number of times the record was edited |
+| Latitude, Longitude, Accuracy_m, Maps_Link | GPS and a Google Maps link |
+| IP | Client IP address |
+| SameIP_Count | Students on this IP, including this one |
+| SameIP_IDs | The other student IDs on this IP |
+| SameName_IDs | Other IDs registered under the same name (e.g. an ID typo from another browser) |
+
+**`<session>_Audited.csv`** (geofence on) — Final's columns plus:
 
 | Column | Description |
 |--------|-------------|
 | Distance_km | Distance from median class location |
-| SameIP_Count | Number of different student IDs from this IP |
-| Status | `Valid`, `SUSPECT: …`, or `FLAGGED: …` |
+| Status | `Valid`, `SUSPECT: …`, or `FLAGGED: …` (out of bounds, no GPS, shared IP, duplicate location, same name, no accuracy) |
 
 ---
 

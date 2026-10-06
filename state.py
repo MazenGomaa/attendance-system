@@ -25,10 +25,6 @@ class Config:
     roster: set = field(default_factory=set)
     geofence: bool = False
     audit_radius_km: float = 2.0
-    ip_identity: bool = True
-    # 3 m: same physical phone held in the same hand; reduces CGNAT false-positives
-    # compared to the old 30 m default which merged adjacent seats.
-    ip_merge_radius_m: float = 3.0
     page_secret: str = ""
     throttle_n: int = 15
     throttle_window: int = 20
@@ -56,7 +52,11 @@ class Store:
     id_to_rid: dict = field(default_factory=dict)
     ip_to_rids: dict = field(default_factory=dict)
     seen_ips: set = field(default_factory=set)
-    events: list = field(default_factory=list)
+    events: list = field(default_factory=list)      # edits + refused ID conflicts (admin view)
+    # Append-only history of every accepted or identity-refused submission.
+    # Records are edited in place; this is what the Raw CSV exports, so nothing
+    # an edit replaced is ever lost.
+    log: list = field(default_factory=list)
 
     def get(self, rid):
         return self.rid_index.get(rid)
@@ -95,6 +95,7 @@ class Store:
         self.records.clear()
         self.rid_index.clear()
         self.events.clear()
+        self.log.clear()
         self.client_to_rid.clear()
         self.id_to_rid.clear()
         self.ip_to_rids.clear()
