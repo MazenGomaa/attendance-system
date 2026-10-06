@@ -48,15 +48,7 @@ pkg install python
 python run.py
 ```
 
-PyPI has no prebuilt wheels for Android, so `run.py` detects Termux and installs a lean, pure-Python set instead of `requirements.txt`: `fastapi<0.126`, `pydantic<2`, `uvicorn`, `qrcode`, `pypng`, `python-multipart`. Nothing needs compiling, so it installs in about a minute. Pydantic v1 is used because v2's `pydantic-core` is written in Rust. QR PNGs are written with `pypng` instead of Pillow.
-
-**Python 3.14+ only:** pydantic v1 doesn't run there, so `run.py` falls back to building `pydantic-core` from source. That needs Rust and takes 10–30 minutes:
-
-```bash
-pkg install rust binutils
-termux-wake-lock          # keep the phone from sleeping during the build
-python run.py
-```
+PyPI has no prebuilt wheels for Android, so `run.py` detects Termux and installs a pure-Python set instead of `requirements.txt`: `starlette`, `uvicorn`, `qrcode`, `pypng`, `python-multipart`. Nothing needs compiling (no Rust, no C compiler), so it installs in about a minute on any Python version. QR PNGs are written with `pypng` instead of Pillow.
 
 ### Offline rooms
 
@@ -149,7 +141,7 @@ Press **Ctrl+C** to stop the server; a final CSV is exported automatically on sh
 ```
 .
 ├── main.py            # Launcher: CLI prompts, tunnel setup, QR codes, uvicorn
-├── app.py             # FastAPI application (all endpoints)
+├── app.py             # Starlette application (all endpoints)
 ├── state.py           # In-memory state: Config and Store dataclasses
 ├── run.py             # Cross-platform bootstrap (venv + deps + cloudflared)
 ├── run.bat            # Windows double-click launcher
@@ -183,7 +175,7 @@ Three Python files handle everything — no database, no migrations, no build pi
   - `id_to_rid` — `student ID → rid` (authoritative dedup key)
   - `ip_to_rids` — `IP → [rid, …]` (CGNAT-aware, multiple rids per IP)
 
-**`app.py`** is the FastAPI application:
+**`app.py`** is the Starlette application (plain Starlette rather than FastAPI, so there's no pydantic and nothing to compile):
 
 - `/api/init` (POST) — one round-trip on page load; returns session info, page token, and the student's existing record if any.
 - `/submit` (POST) — create-or-edit. The resolve → dedup → write block contains **no `await`**, which is the atomicity guarantee: the single-threaded event loop cannot interleave two submissions mid-block.

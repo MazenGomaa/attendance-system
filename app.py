@@ -1,7 +1,7 @@
 """
 app.py
 ------
-FastAPI app: student create/edit endpoints, admin endpoints, and the lifespan
+Starlette app: student create/edit endpoints, admin endpoints, and the lifespan
 hook that exports CSVs (raw + GPS-audited) on shutdown.
 """
 
@@ -19,11 +19,16 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from statistics import median
 
-from fastapi import FastAPI, Request
-from fastapi.responses import (JSONResponse, FileResponse, HTMLResponse,
-                               RedirectResponse)
-from fastapi.staticfiles import StaticFiles
+# Plain Starlette, not FastAPI: no pydantic, so nothing needs compiling
+# (pydantic-core is Rust, and Termux/Android has no prebuilt wheels for it).
+from starlette.applications import Starlette
+from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import (JSONResponse, FileResponse, HTMLResponse,
+                                 RedirectResponse)
+from starlette.routing import Mount, Route
+from starlette.staticfiles import StaticFiles
 
 from state import config, store, admin_lock
 
@@ -201,7 +206,7 @@ def _audit_csv(rows, base):
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: Starlette):
     print(f"[lifespan] session '{config.session_id()}' started")
     yield
     try:
@@ -214,7 +219,15 @@ async def lifespan(app: FastAPI):
             print(r)
 
 
-app = FastAPI(lifespan=lifespan)
+_routes = []
+
+
+def _route(path: str, method: str):
+    """Collect handlers for the Starlette() constructor at the bottom of the file."""
+    def deco(fn):
+        _routes.append(Route(path, fn, methods=[method]))
+        return fn
+    return deco
 
 
 class _SecurityHeaders(BaseHTTPMiddleware):
@@ -228,9 +241,6 @@ class _SecurityHeaders(BaseHTTPMiddleware):
             "style-src 'self' 'unsafe-inline'; img-src 'self' data:;"
         )
         return resp
-
-
-app.add_middleware(_SecurityHeaders)
 
 
 def real_peer_ip(request: Request) -> str:
@@ -363,7 +373,7 @@ def resolve_for_submit(device_id: str, token: str, ip: str, lat, lng):
     return None, None
 
 
-@app.get("/", response_class=HTMLResponse)
+@_route("/", "GET")
 async def index(request: Request):
     if (config.force_single_origin and len(config.tunnel_urls) == 1):
         host = request.headers.get("host", "")
@@ -374,7 +384,7 @@ async def index(request: Request):
     return FileResponse(os.path.join(HERE, "static", "index.html"))
 
 
-@app.post("/api/init")
+@_route("/api/init", "POST")
 async def init(request: Request):
     """
     One round-trip on page load: returns session info, a fresh page token, and
@@ -388,12 +398,12 @@ async def init(request: Request):
     token = request.cookies.get(COOKIE_NAME, "")
     rid = resolve_by_device(device_id, token)
     rec = store.get(rid) if rid else None
-    return {"course": config.course_name, "count": len(store.records),
-            "geofence": config.geofence, "page_token": issue_page_token(),
-            "record": ({"name": rec["name"], "id": rec["id"]} if rec else None)}
+    return JSONResponse({"course": config.course_name, "count": len(store.records),
+                         "geofence": config.geofence, "page_token": issue_page_token(),
+                         "record": ({"name": rec["name"], "id": rec["id"]} if rec else None)})
 
 
-@app.post("/submit")
+@_route("/submit", "POST")
 async def submit(request: Request):
     """
     CREATE-OR-EDIT. The resolve+dedup+mutation block below has no await inside,
@@ -592,7 +602,7 @@ def _check_admin(request: Request) -> bool:
     return False
 
 
-@app.post("/admin/login")
+@_route("/admin/login", "POST")
 async def admin_login(request: Request):
     """Verify password; on success set an HttpOnly login cookie."""
     peer = real_peer_ip(request)
@@ -604,7 +614,7 @@ async def admin_login(request: Request):
     except Exception:
         body = {}
     if not config.admin_pw_hash:
-        return {"ok": True, "no_password": True}
+        return JSONResponse({"ok": True, "no_password": True})
     if _pw_ok(str(body.get("pw", ""))):
         is_https = request.headers.get("x-forwarded-proto") == "https"
         resp = JSONResponse({"ok": True})
@@ -615,7 +625,7 @@ async def admin_login(request: Request):
     return JSONResponse({"ok": False, "error": "wrong password"}, status_code=401)
 
 
-@app.get("/admin", response_class=HTMLResponse)
+@_route("/admin", "GET")
 async def admin_page(request: Request):
     if not _check_admin(request):
         if config.admin_pw_hash:
@@ -626,7 +636,7 @@ async def admin_page(request: Request):
     return FileResponse(os.path.join(HERE, "static", "admin.html"))
 
 
-@app.get("/admin/state")
+@_route("/admin/state", "GET")
 async def admin_state(request: Request):
     if not _check_admin(request):
         return reject("unauthorized", 401)
@@ -634,14 +644,14 @@ async def admin_state(request: Request):
                "edited": bool(r.get("edited_at")),
                "gps": isinstance(r.get("lat"), (int, float))}
               for r in store.records[-15:][::-1]]
-    return {"course": config.course_name, "session_id": config.session_id(),
-            "count": len(store.records), "devices": len(store.id_to_rid),
-            "ip_tracking": config.ip_tracking, "geofence": config.geofence,
-            "audit_radius_km": config.audit_radius_km,
-            "merges": store.events[-20:][::-1], "recent": recent}
+    return JSONResponse({"course": config.course_name, "session_id": config.session_id(),
+                         "count": len(store.records), "devices": len(store.id_to_rid),
+                         "ip_tracking": config.ip_tracking, "geofence": config.geofence,
+                         "audit_radius_km": config.audit_radius_km,
+                         "merges": store.events[-20:][::-1], "recent": recent})
 
 
-@app.post("/admin/reset-devices")
+@_route("/admin/reset-devices", "POST")
 async def admin_reset_devices(request: Request):
     if not _check_admin(request):
         return reject("unauthorized", 401)
@@ -649,10 +659,10 @@ async def admin_reset_devices(request: Request):
         store.clear_devices()
         _throttle.clear()
         _ip_throttle.clear()
-    return {"ok": True, "message": "Device locks cleared; cookies reset for a new take"}
+    return JSONResponse({"ok": True, "message": "Device locks cleared; cookies reset for a new take"})
 
 
-@app.post("/admin/new-session")
+@_route("/admin/new-session", "POST")
 async def admin_new_session(request: Request):
     if not _check_admin(request):
         return reject("unauthorized", 401)
@@ -682,11 +692,11 @@ async def admin_new_session(request: Request):
         print(f"[export:new-session] ERROR: {e}")
         exported = "(export failed)"
 
-    return {"ok": True, "exported": exported,
-            "course": config.course_name, "session_id": config.session_id()}
+    return JSONResponse({"ok": True, "exported": exported,
+                         "course": config.course_name, "session_id": config.session_id()})
 
 
-@app.post("/admin/export")
+@_route("/admin/export", "POST")
 async def admin_export(request: Request):
     if not _check_admin(request):
         return reject("unauthorized", 401)
@@ -694,11 +704,11 @@ async def admin_export(request: Request):
         raw, audit = await asyncio.to_thread(export_csv, "manual")
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-    return {"ok": True, "raw": os.path.basename(raw),
-            "audited": os.path.basename(audit) if audit else None}
+    return JSONResponse({"ok": True, "raw": os.path.basename(raw),
+                         "audited": os.path.basename(audit) if audit else None})
 
 
-@app.get("/admin/download")
+@_route("/admin/download", "GET")
 async def admin_download(request: Request):
     if not _check_admin(request):
         return reject("unauthorized", 401)
@@ -710,4 +720,9 @@ async def admin_download(request: Request):
     return FileResponse(path, filename=os.path.basename(path), media_type="text/csv")
 
 
-app.mount("/static", StaticFiles(directory=os.path.join(HERE, "static")), name="static")
+app = Starlette(
+    routes=_routes + [Mount("/static", StaticFiles(directory=os.path.join(HERE, "static")),
+                            name="static")],
+    middleware=[Middleware(_SecurityHeaders)],
+    lifespan=lifespan,
+)
