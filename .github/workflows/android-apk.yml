@@ -1,0 +1,133 @@
+name: Android APK
+
+# Builds the Flutter host app and publishes the APK as a GitHub pre-release
+# (Releases don't count against the Actions artifact storage quota).
+on:
+  push:
+    paths:
+      - 'flutter_app/**'
+      - 'static/**'
+      - '.github/workflows/android-apk.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write   # create releases
+
+concurrency:
+  group: apk-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FLUTTER_VERSION: '3.47.6'
+  KEEP_RELEASES: '5'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      # ---- cloudflared for Android -------------------------------------------
+      # Built from Cloudflare's source for GOOS=android with cgo, so DNS goes
+      # through Android's resolver. The generic linux-arm64 release falls back
+      # to [::1]:53 on Android (no /etc/resolv.conf) and can't create tunnels.
+      - name: Resolve latest cloudflared release
+        id: cf
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(gh release view -R cloudflare/cloudflared --json tagName -q .tagName)
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "cloudflared $tag"
+
+      - name: Cache cloudflared build
+        id: cfcache
+        uses: actions/cache@v4
+        with:
+          path: cf-out
+          key: cloudflared-android-arm64-${{ steps.cf.outputs.tag }}-v1
+
+      - name: Check out cloudflared source
+        if: steps.cfcache.outputs.cache-hit != 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: cloudflare/cloudflared
+          ref: ${{ steps.cf.outputs.tag }}
+          path: cf-src
+
+      - name: Set up Go
+        if: steps.cfcache.outputs.cache-hit != 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: cf-src/go.mod
+          cache: false
+
+      - name: Build cloudflared (android/arm64, cgo)
+        if: steps.cfcache.outputs.cache-hit != 'true'
+        run: |
+          ndk="${ANDROID_NDK_LATEST_HOME:-}"
+          if [ -z "$ndk" ]; then ndk=$(ls -d "$ANDROID_HOME"/ndk/* | sort -V | tail -1); fi
+          cc="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
+          test -x "$cc" || { echo "NDK clang not found at $cc"; exit 1; }
+          mkdir -p cf-out
+          cd cf-src
+          CGO_ENABLED=1 GOOS=android GOARCH=arm64 CC="$cc" \
+            go build -trimpath \
+              -ldflags "-s -w -X main.Version=${{ steps.cf.outputs.tag }} -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+              -o ../cf-out/libcloudflared.so ./cmd/cloudflared
+          ls -la ../cf-out
+          file ../cf-out/libcloudflared.so
+
+      - name: Bundle cloudflared into the app
+        run: |
+          mkdir -p flutter_app/android/app/src/main/jniLibs/arm64-v8a
+          cp cf-out/libcloudflared.so flutter_app/android/app/src/main/jniLibs/arm64-v8a/
+
+      # ---- Flutter APK -------------------------------------------------------
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Test
+        working-directory: flutter_app
+        run: |
+          flutter pub get
+          flutter analyze
+          flutter test
+
+      - name: Build APK (arm64)
+        working-directory: flutter_app
+        run: |
+          flutter build apk --release --target-platform android-arm64 \
+            --build-number=${{ github.run_number }}
+          cp build/app/outputs/flutter-apk/app-release.apk \
+            "$GITHUB_WORKSPACE/attendance-host-${{ github.run_number }}.apk"
+
+      # ---- Publish -----------------------------------------------------------
+      - name: Publish pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="app-build-${{ github.run_number }}"
+          short=$(git rev-parse --short HEAD)
+          gh release create "$tag" "attendance-host-${{ github.run_number }}.apk" \
+            --prerelease --target "$GITHUB_SHA" \
+            --title "Attendance Host build ${{ github.run_number }}" \
+            --notes "Branch \`${GITHUB_REF_NAME}\` @ \`$short\`, cloudflared ${{ steps.cf.outputs.tag }}. Install the .apk on the phone (allow installs from your browser if asked)."
+
+      - name: Keep only the latest ${{ env.KEEP_RELEASES }} builds
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release list --limit 100 --json tagName,createdAt \
+            -q '[.[] | select(.tagName | startswith("app-build-"))] | sort_by(.createdAt) | reverse | .[].tagName' \
+            | tail -n +$((KEEP_RELEASES + 1)) \
+            | while read -r t; do gh release delete "$t" --yes --cleanup-tag; done
