@@ -27,20 +27,6 @@
     <button id="go">Enter</button>
     <div id="err"></div>
   </div>
-<script>
-  const pw = document.getElementById('pw'), err = document.getElementById('err');
-  async function login() {
-    err.textContent = '';
-    try {
-      const r = await fetch('/admin/login', { method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pw: pw.value }) });
-      if (r.ok) { location.href = '/admin'; }   // cookie set; reload into console
-      else { err.textContent = 'Wrong password'; pw.value=''; pw.focus(); }
-    } catch (e) { err.textContent = 'Connection error'; }
-  }
-  document.getElementById('go').addEventListener('click', login);
-  pw.addEventListener('keydown', e => { if (e.key === 'Enter') login(); });
-</script>
+<script src="/static/login.js"></script>
 </body>
 </html>

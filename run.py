@@ -42,7 +42,7 @@ CF_RELEASE = "https://github.com/cloudflare/cloudflared/releases/latest/download
 
 # (import_name, install_name) pairs for the quick missing-package check.
 REQUIRED_PACKAGES = [
-    ("fastapi", "fastapi"),
+    ("starlette", "starlette"),
     ("uvicorn", "uvicorn"),
     ("qrcode", "qrcode"),
     ("multipart", "python-multipart"),
@@ -77,16 +77,33 @@ def _missing_packages() -> list:
     return missing
 
 
+# Termux/Android: PyPI has no prebuilt wheels for this platform, so anything
+# with native code compiles from source. Install only the pure-Python set: no
+# uvicorn[standard] (uvloop/httptools/watchfiles) and no Pillow; pypng writes
+# the QR PNGs instead.
+TERMUX_PACKAGES = ["starlette", "uvicorn", "qrcode", "pypng", "python-multipart"]
+
+
+def is_termux() -> bool:
+    return "com.termux" in os.environ.get("PREFIX", "") or hasattr(sys, "getandroidapilevel")
+
+
 def _install_deps():
     req = os.path.join(HERE, "requirements.txt")
+    termux = is_termux()
     print("[setup] installing dependencies (may take a minute on first run) …")
+    if termux:
+        print("[setup] Termux detected: installing the pure-Python set.")
     try:
         subprocess.check_call(
             [venv_python(), "-m", "pip", "install", "--upgrade", "pip", "--quiet"]
         )
     except Exception:
         pass  # pip upgrade is best-effort
-    subprocess.check_call([venv_python(), "-m", "pip", "install", "-r", req])
+    if termux:
+        subprocess.check_call([venv_python(), "-m", "pip", "install", *TERMUX_PACKAGES])
+    else:
+        subprocess.check_call([venv_python(), "-m", "pip", "install", "-r", req])
     open(MARK, "w").close()
     print("[setup] dependencies installed.")
 
@@ -145,7 +162,8 @@ def cloudflared_target():
         try:
             import sysconfig
             host = sysconfig.get_config_var("HOST_GNU_TYPE") or ""
-            a = "armhf" if "gnueabihf" in host else "arm"
+            # Android (Termux) reports "androideabi"; it is always hard-float.
+            a = "armhf" if ("gnueabihf" in host or "android" in host) else "arm"
         except Exception:
             # Fallback: ARMv7 and above always use hard-float in practice.
             a = "armhf" if arch.startswith("armv7") else "arm"
@@ -166,7 +184,30 @@ def have_cloudflared() -> bool:
     )
 
 
+def _termux_cloudflared():
+    """
+    Termux: use the `cloudflared` package from Termux's own repo. The generic
+    linux-arm64 release looks up DNS via [::1]:53 on Android (there is no
+    /etc/resolv.conf), so Quick Tunnels fail with "failed to request quick
+    Tunnel". Termux's build reads $PREFIX/etc/resolv.conf instead.
+    """
+    from shutil import which
+    if which("cloudflared"):
+        return
+    print("[setup] installing cloudflared from the Termux repo (pkg install cloudflared) …")
+    try:
+        subprocess.check_call(["pkg", "install", "-y", "cloudflared"])
+        print("[setup] cloudflared ready.")
+    except Exception as e:
+        print(f"[setup] pkg install cloudflared failed: {e}")
+        print("        Run it yourself:  pkg install cloudflared")
+        print("        The server still runs LAN-only until then.")
+
+
 def ensure_cloudflared():
+    if is_termux():
+        _termux_cloudflared()
+        return
     if have_cloudflared():
         return
     url, outname, kind = cloudflared_target()

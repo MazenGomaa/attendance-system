@@ -22,13 +22,13 @@ Three Python files do everything; no database, no migrations, no build pipeline.
 
 **`state.py`** — process-wide singletons:
 - `Config` dataclass: session metadata, feature flags, security secrets (all set at startup by `main.py`; never persisted to disk).
-- `Store` dataclass: six in-memory structures — `records` (master list), `rid_index` (O(1) rid→record dict), `client_to_rid`, `id_to_rid`, `ip_to_rids`, `seen_ips`. Use `store.add_record(r)` to append; never append to `store.records` directly.
+- `Store` dataclass: in-memory structures — `records` (master list, edited in place), `rid_index` (O(1) rid→record dict), `client_to_rid`, `id_to_rid`, `ip_to_rids` (flags only, never identity), `seen_ips`, `events` (admin edit/conflict feed), `log` (append-only history of every submission; the Raw CSV). Use `store.add_record(r)` to append; never append to `store.records` directly.
 - `admin_lock`: a `threading.Lock` acquired by any code that mutates `Store` while possibly exporting (the export path also holds it).
 
-**`app.py`** — FastAPI application mounted by `main.py`:
+**`app.py`** — Starlette application mounted by `main.py` (deliberately not FastAPI: no pydantic, so Termux installs need no Rust). Routes register via the `@_route(path, method)` decorator and must return `Response` objects, not dicts:
 - `/api/init` (POST): single round-trip on page load; returns session info + page token + existing record for prefill.
-- `/submit` (POST): create-or-edit path; the resolve → dedup → write block has **no `await` inside it**, which is the atomicity guarantee — the single-threaded event loop cannot interleave two submissions mid-block.
-- `/admin/*`: state read, reset-devices, new-session, export, download. Admin access is gated by `_check_admin()` which checks password cookie/header first, then falls back to loopback/trusted-CIDR check when no password is set.
+- `/submit` (POST): create-or-edit path; the resolve → dedup → write block has **no `await` inside it**, which is the atomicity guarantee — the single-threaded event loop cannot interleave two submissions mid-block. Identity = deviceId/cookie, else existing ID **and** matching name (`name_key()` folds Arabic spelling variants); a taken ID with a different name is refused and logged. Shared IP / GPS proximity must never select a record (CGNAT students share IPs) — they are export flags only. Every outcome goes through `_log()`.
+- `/admin/*`: state read, reset-devices, new-session, export, download (`?file=final|raw|audited`), end-session (sets `config.ended` so `/submit` returns 410, exports, copies to Downloads, then calls `config.request_shutdown`, which `main.py` wires to `uvicorn.Server.should_exit`). Admin access is gated by `_check_admin()` which checks password cookie/header first, then falls back to loopback/trusted-CIDR check (Host must be `localhost` or an IP: DNS-rebinding guard) when no password is set. Admin POSTs must send `X-Requested-With: att-admin` (CSRF; enforced in `_SecurityHeaders`).
 - Lifespan hook: exports CSVs on shutdown (Ctrl+C).
 
 **`run.py`** — cross-platform bootstrap (the real entry point):
@@ -39,17 +39,19 @@ Three Python files do everything; no database, no migrations, no build pipeline.
 **`main.py`** — session launcher (called by `run.py`):
 - Interactive CLI prompts → populates `config` fields.
 - Optionally starts 1–4 Cloudflare Quick Tunnels (`cloudflared` binary, found via PATH or next to `main.py`).
-- Generates QR codes (ASCII + PNG via `qrcode[pil]`).
-- Calls `uvicorn.run(app, workers=1)`.
+- Generates QR codes (ASCII + PNG via `qrcode[pil]`, or pure-Python `pypng` on Termux).
+- Runs `uvicorn.Server(...workers=1)` and sets `config.request_shutdown`; on exit terminates tunnels and runs `termux-wake-unlock` if present.
 
 **`static/`** — plain HTML/CSS/JS, no framework, no bundler:
-- `index.html`: student submission form (RTL Arabic, calls `/api/init` then `/submit`).
-- `admin.html`: admin dashboard (live count, recent records, merge log, reset/export buttons).
-- `login.html`: shown instead of admin dashboard when a password is set and the request is unauthenticated.
+- `index.html` + `index.js`: student submission form (RTL Arabic, calls `/api/init` then `/submit`).
+- `admin.html` + `admin.js`: admin dashboard (live counts incl. out-of-bounds, recent records with distance, edit/conflict log, download/reset buttons).
+- `login.html` + `login.js`: shown instead of admin dashboard when a password is set and the request is unauthenticated.
+- Keep JavaScript in the `.js` files: the CSP is `script-src 'self'`, so inline `<script>` blocks are blocked.
 
-**`exports/`** — CSV output directory, created on first run. Two files per session:
-- `<session>_Raw.csv`: Name, ID, Submitted_At, Last_Updated, Latitude, Longitude, Accuracy_m, IP.
-- `<session>_Audited.csv`: same plus Distance_km, SameIP_Count, Status (written only when geofencing is on).
+**`exports/`** — CSV output directory, created on first run. Per session:
+- `<session>_Raw.csv`: every submission from `store.log` (created / updated / refused, with Prev_Name/Prev_ID, Maps_Link, Device hash, Note).
+- `<session>_Final.csv`: one row per student, plus Edits, Maps_Link, SameIP_Count/SameIP_IDs, SameName_IDs.
+- `<session>_Audited.csv`: Final's columns plus Distance_km, Status (written only when geofencing is on).
 
 ## Key design constraints
 

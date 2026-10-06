@@ -43,6 +43,7 @@ def detect_local_ip() -> str:
 
 
 def _find_cloudflared():
+    # PATH first: on Termux that's the pkg build, which resolves DNS correctly.
     p = shutil.which("cloudflared")
     if p:
         return p
@@ -67,7 +68,9 @@ def start_tunnels(port: int, count: int, timeout: float = 30.0):
               "LAN-only. Install it for mobile-data clients.")
         return [], []
 
-    pat = re.compile(r"https://[-\w]+\.trycloudflare\.com")
+    # Skip api.trycloudflare.com: it's the endpoint cloudflared calls to *request*
+    # a tunnel, and it shows up in the error line when that request fails.
+    pat = re.compile(r"https://(?!api\.)[-\w]+\.trycloudflare\.com")
     procs, holders = [], []
 
     for i in range(count):
@@ -80,13 +83,15 @@ def start_tunnels(port: int, count: int, timeout: float = 30.0):
              "--url", f"http://localhost:{port}"],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
         )
-        holder = {"url": ""}
+        holder = {"url": "", "err": ""}
 
         def reader(p=proc, h=holder):
             for line in p.stdout:
                 m = pat.search(line)
                 if m and not h["url"]:
                     h["url"] = m.group(0)
+                elif " ERR " in line or "failed" in line:
+                    h["err"] = line.strip()
 
         threading.Thread(target=reader, daemon=True).start()
         procs.append(proc)
@@ -100,6 +105,13 @@ def start_tunnels(port: int, count: int, timeout: float = 30.0):
     urls = [h["url"] for h in holders if h["url"]]
     if len(urls) < count:
         print(f"[tunnel] got {len(urls)}/{count} URLs (others timed out).")
+        errs = {h["err"] for h in holders if not h["url"] and h["err"]}
+        for e in errs:
+            print(f"[tunnel] cloudflared said: {e}")
+        if any("[::1]:53" in e for e in errs):
+            print("[tunnel] DNS lookup failed. On Termux, use Termux's own build:\n"
+                  "           pkg install cloudflared\n"
+                  "         and delete the downloaded 'cloudflared' file next to main.py.")
     return procs, urls
 
 
@@ -112,7 +124,16 @@ def save_qr(url: str, label: str):
     here = os.path.dirname(os.path.abspath(__file__))
     path = os.path.join(here, f"qr_{label.lower().replace(' ', '_')}.png")
     try:
-        qr.make_image().save(path)
+        try:
+            qr.make_image().save(path)
+        except ImportError:
+            # Lean install (e.g. Termux) has no Pillow: use pure-Python pypng.
+            from qrcode.image.pure import PyPNGImage
+            qr.make_image(image_factory=PyPNGImage).save(path)
+    except ImportError:
+        print("[qr] PNG not saved (neither Pillow nor pypng installed) — "
+              "scan the QR above or share the URL.")
+        path = None
     except Exception:
         path = None
     return path
@@ -191,8 +212,6 @@ def main():
 
     course = input("Course / subject name: ").strip() or "Session"
     geo = input("Require location access + GPS audit at export? [y/N]: ").strip().lower()
-    ipid = input("Treat one IP as one device (stops browser-switching to submit\n"
-                 "twice; may collide if students share a mobile-carrier IP) [Y/n]: ").strip().lower()
     try:
         ntun = int(input("How many Cloudflare tunnels to open (1-4, more = more "
                          "concurrent capacity) [2]: ").strip() or "2")
@@ -222,7 +241,6 @@ def main():
             config.audit_radius_km = max(0.05, rad)
         except ValueError:
             config.audit_radius_km = 0.5
-    config.ip_identity = (ipid != "n")
     config.ip_tracking = False
     config.tunnel_count = ntun
     config.roster = load_roster()
@@ -272,14 +290,24 @@ def main():
         img = save_qr(local_url, "Student URL (LAN)")
         open_file(img)
 
+    server = uvicorn.Server(uvicorn.Config(app, host="0.0.0.0", port=PORT, workers=1,
+                                           log_level="warning"))
+    # Lets the admin page's "End session" button stop the server cleanly on every
+    # OS (same path as Ctrl+C: the lifespan hook exports, then we land in finally).
+    config.request_shutdown = lambda: setattr(server, "should_exit", True)
     try:
-        uvicorn.run(app, host="0.0.0.0", port=PORT, workers=1, log_level="warning")
+        server.run()
     finally:
         for p in procs:
             try:
                 p.terminate()
             except Exception:
                 pass
+        if shutil.which("termux-wake-unlock"):
+            # Let the phone sleep normally again (pairs with termux-wake-lock).
+            subprocess.run(["termux-wake-unlock"], check=False)
+        print("\n[session] ended — server and tunnels stopped. CSVs are in "
+              f"{os.path.join(os.path.dirname(os.path.abspath(__file__)), 'exports')}")
 
 
 if __name__ == "__main__":
