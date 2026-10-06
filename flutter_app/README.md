@@ -30,6 +30,14 @@ move signing to CI secrets before distributing more widely.
 | 3 | Crash recovery, tunnel auto-restart, battery-optimisation guidance | |
 | 4 | Real classroom test | |
 
+## How the app stays alive
+
+`AttendanceApp` (the Android `Application`) creates the Flutter engine and
+caches it; `MainActivity` only attaches to it. Swiping the app away destroys
+the activity but not the engine, and `HostService` (a foreground service with
+wake/Wi-Fi locks) keeps the process alive, so the session keeps running. Only
+the in-app **Stop session** button ends it.
+
 ## Debugging
 
 The bug icon opens the Debug screen: device info, battery-optimisation state,

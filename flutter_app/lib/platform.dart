@@ -22,6 +22,10 @@ class HostPlatform {
   static Future<void> requestBatteryExemption() =>
       _ch.invokeMethod('requestBatteryExemption');
 
+  /// Saves a PNG into Pictures/Attendance; returns the saved location.
+  static Future<String> saveImage(Uint8List bytes, String name) async =>
+      (await _ch.invokeMethod<String>('saveImage', {'bytes': bytes, 'name': name}))!;
+
   static Future<Map<String, Object?>> deviceInfo() async {
     final m = await _ch.invokeMapMethod<String, Object?>('deviceInfo');
     return m ?? const {};

@@ -4,9 +4,11 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import 'package:share_plus/share_plus.dart';
 
 import 'debug_log.dart';
 import 'platform.dart';
+import 'qr_image.dart';
 import 'test_server.dart';
 import 'tunnels.dart';
 
@@ -180,6 +182,42 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           ),
         ],
       ),
+      // Start/Stop live in a fixed bar above the system navigation buttons, so
+      // they stay reachable however many tunnel cards the list holds.
+      bottomNavigationBar: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+          child: c.running
+              ? Row(children: [
+                  if ((tm?.tunnels.where((t) => t.url != null).length ?? 0) > 1) ...[
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        icon: const Icon(Icons.share),
+                        label: const Text('Share all QR'),
+                        onPressed: () => shareQrs(tm!.tunnels
+                            .where((t) => t.url != null)
+                            .map((t) => (t.url!, 'Tunnel ${t.index}'))
+                            .toList()),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                  ],
+                  Expanded(
+                    child: FilledButton.icon(
+                      style: FilledButton.styleFrom(backgroundColor: Colors.red.shade700),
+                      icon: const Icon(Icons.stop),
+                      label: const Text('Stop session'),
+                      onPressed: c.stop,
+                    ),
+                  ),
+                ])
+              : FilledButton.icon(
+                  icon: const Icon(Icons.play_arrow),
+                  label: Text(c.busy ? 'Starting…' : 'Start test session'),
+                  onPressed: c.busy ? null : () => c.start(tunnelCount),
+                ),
+        ),
+      ),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -204,21 +242,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               selected: {tunnelCount},
               onSelectionChanged: (s) => setState(() => tunnelCount = s.first),
             ),
-            const SizedBox(height: 16),
-            FilledButton.icon(
-              icon: const Icon(Icons.play_arrow),
-              label: Text(c.busy ? 'Starting…' : 'Start test session'),
-              onPressed: c.busy ? null : () => c.start(tunnelCount),
-            ),
+            const SizedBox(height: 12),
+            const Text('Closing or swiping the app away keeps the session running. '
+                'Only "Stop session" ends it.',
+                style: TextStyle(color: Colors.white70, fontSize: 13)),
           ] else ...[
             _statusCard(),
             for (final t in tm?.tunnels ?? const <Tunnel>[]) _tunnelCard(t),
-            const SizedBox(height: 8),
-            OutlinedButton.icon(
-              icon: const Icon(Icons.stop),
-              label: const Text('Stop session'),
-              onPressed: c.stop,
-            ),
           ],
         ],
       ),
@@ -274,6 +304,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                   onPressed: () => Clipboard.setData(ClipboardData(text: t.url!)),
                 ),
                 TextButton.icon(
+                  icon: const Icon(Icons.share, size: 18),
+                  label: const Text('Share QR'),
+                  onPressed: () => shareQrs([(t.url!, 'Tunnel ${t.index}')]),
+                ),
+                TextButton.icon(
                   icon: const Icon(Icons.qr_code, size: 18),
                   label: const Text('Show QR'),
                   onPressed: () => Navigator.push(context, MaterialPageRoute(
@@ -290,24 +325,87 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 }
 
+/// Shares one or more QR codes as PNG images through the Android share sheet.
+Future<void> shareQrs(List<(String, String)> items) async {
+  try {
+    final files = <XFile>[];
+    for (final (url, title) in items) {
+      final bytes = await renderQrPng(url, title);
+      // Directory.systemTemp is the app's cache dir on Android.
+      final f = File('${Directory.systemTemp.path}/${_qrFileName(title)}');
+      await f.writeAsBytes(bytes);
+      files.add(XFile(f.path, mimeType: 'image/png'));
+    }
+    await SharePlus.instance.share(ShareParams(
+      files: files,
+      text: items.map((e) => '${e.$2}: ${e.$1}').join('\n'),
+    ));
+    log('qr', 'shared ${files.length} QR image(s)');
+  } catch (e) {
+    log('qr', 'share failed: $e');
+  }
+}
+
+String _qrFileName(String title) =>
+    'attendance-qr-${title.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '-')}.png';
+
 class QrPage extends StatelessWidget {
   const QrPage({super.key, required this.url, required this.title});
   final String url;
   final String title;
+
+  Future<void> _save(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final bytes = await renderQrPng(url, title);
+      final stamp = DateTime.now().toIso8601String().substring(0, 19).replaceAll(':', '-');
+      final where = await HostPlatform.saveImage(
+          bytes, _qrFileName('$title $stamp'));
+      log('qr', 'saved $where');
+      messenger.showSnackBar(SnackBar(content: Text('Saved to $where')));
+    } catch (e) {
+      log('qr', 'save failed: $e');
+      messenger.showSnackBar(SnackBar(content: Text('Save failed: $e')));
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(title: Text(title)),
-      body: Center(
+      bottomNavigationBar: SafeArea(
         child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            QrImageView(data: url, backgroundColor: Colors.white, size: 320),
-            const SizedBox(height: 12),
-            SelectableText(url, style: const TextStyle(color: Colors.black, fontSize: 16)),
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+          child: Row(children: [
+            Expanded(
+              child: FilledButton.icon(
+                icon: const Icon(Icons.download),
+                label: const Text('Save to Gallery'),
+                onPressed: () => _save(context),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: FilledButton.icon(
+                icon: const Icon(Icons.share),
+                label: const Text('Share'),
+                onPressed: () => shareQrs([(url, title)]),
+              ),
+            ),
           ]),
+        ),
+      ),
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(16),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              QrImageView(data: url, backgroundColor: Colors.white, size: 320),
+              const SizedBox(height: 12),
+              SelectableText(url, style: const TextStyle(color: Colors.black, fontSize: 16)),
+            ]),
+          ),
         ),
       ),
     );
@@ -376,7 +474,7 @@ class _DebugPageState extends State<DebugPage> {
     final info = widget.controller.device;
     return Scaffold(
       appBar: AppBar(title: const Text('Debug')),
-      body: Column(
+      body: SafeArea(child: Column(
         children: [
           Padding(
             padding: const EdgeInsets.all(12),
@@ -414,7 +512,7 @@ class _DebugPageState extends State<DebugPage> {
             ),
           ),
         ],
-      ),
+      )),
     );
   }
 }

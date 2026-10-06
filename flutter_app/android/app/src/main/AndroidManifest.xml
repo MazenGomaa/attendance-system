@@ -10,7 +10,7 @@
 
     <application
         android:label="Attendance Host"
-        android:name="${applicationName}"
+        android:name=".AttendanceApp"
         android:icon="@mipmap/ic_launcher">
         <activity
             android:name=".MainActivity"

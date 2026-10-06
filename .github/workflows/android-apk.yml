@@ -26,7 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # ---- cloudflared for Android -------------------------------------------
       # Built from Cloudflare's source for GOOS=android with cgo, so DNS goes
@@ -43,14 +43,14 @@ jobs:
 
       - name: Cache cloudflared build
         id: cfcache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: cf-out
           key: cloudflared-android-arm64-${{ steps.cf.outputs.tag }}-v1
 
       - name: Check out cloudflared source
         if: steps.cfcache.outputs.cache-hit != 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: cloudflare/cloudflared
           ref: ${{ steps.cf.outputs.tag }}
@@ -58,7 +58,7 @@ jobs:
 
       - name: Set up Go
         if: steps.cfcache.outputs.cache-hit != 'true'
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: cf-src/go.mod
           cache: false
@@ -85,7 +85,7 @@ jobs:
           cp cf-out/libcloudflared.so flutter_app/android/app/src/main/jniLibs/arm64-v8a/
 
       # ---- Flutter APK -------------------------------------------------------
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
