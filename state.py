@@ -31,6 +31,10 @@ class Config:
     admin_cidrs: list = field(default_factory=list)
     admin_pw_hash: str = ""
     admin_pw_salt: str = ""
+    # Set by /admin/end-session: submissions are refused from then on.
+    ended: bool = False
+    # Set by main.py: asks uvicorn to shut down gracefully (tunnels stop with it).
+    request_shutdown: object = None
 
     @property
     def tunnel_url(self) -> str:

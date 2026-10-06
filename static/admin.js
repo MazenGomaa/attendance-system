@@ -89,5 +89,29 @@ $('newsess').addEventListener('click', async () => {
   } catch (e) { toast('New session failed — check server'); }
 });
 
+$('endsess').addEventListener('click', async () => {
+  if (!confirm('End the attendance session now?\n\n'
+      + '• Students can no longer submit\n• All CSVs are saved and copied to Downloads\n'
+      + '• The server and tunnels stop (the student link stops working)')) return;
+  $('endsess').disabled = true;
+  try {
+    const r = await adminPost('/admin/end-session');
+    const d = await r.json();
+    if (!d.ok) { toast(d.error || 'End session failed'); $('endsess').disabled = false; return; }
+    clearInterval(timer);
+    const p = $('endedPanel');
+    p.innerHTML = '<h3>Session ended</h3>'
+      + '<div>Saved: ' + d.files.map(f => '<code>' + esc(f) + '</code>').join(', ') + '</div>'
+      + '<div>In: <code>' + esc(d.exports_dir) + '</code></div>'
+      + (d.copied_to
+          ? '<div>Copied to: <code>' + esc(d.copied_to) + '</code></div>'
+          : '<div>Not copied to Downloads (on Termux, run <code>termux-setup-storage</code> once to enable this).</div>')
+      + (d.stopping ? '<div>The server and tunnels are shutting down. You can close this page.</div>' : '');
+    p.style.display = 'block';
+    document.querySelectorAll('.bar button').forEach(b => { b.disabled = true; });
+    window.scrollTo(0, 0);
+  } catch (e) { toast('End session failed — check server'); $('endsess').disabled = false; }
+});
+
 refresh();
-setInterval(refresh, 2000);
+const timer = setInterval(refresh, 2000);

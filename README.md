@@ -129,13 +129,14 @@ Open `http://localhost:8000/admin` on the host machine (or the admin URL printed
 | Export snapshot | Writes all CSVs to `exports/` without downloading |
 | Reset for new take | Clears device locks so everyone can re-submit (records are kept) |
 | New subject… | Exports current session, clears all records, starts a new session |
+| End session | Closes attendance (new submissions refused), saves all CSVs, copies them to Downloads (`~/storage/downloads` on Termux after `termux-setup-storage`, else `~/Downloads`), then stops the server and tunnels and releases the Termux wake lock |
 
 The dashboard auto-refreshes every 2 s and shows:
 - Live counts: submissions, students, edits/conflicts, out of bounds (geofence on), students on a shared IP
 - The 30 most recent submissions with their distance from the median hall position (out-of-bounds in red)
 - Every edit (labelled *same student*, *ID corrected*, *name corrected* or *different student*) and every refused attempt to use an ID that's already registered
 
-Press **Ctrl+C** to stop the server; a final CSV is exported automatically on shutdown.
+Press **Ctrl+C** (or **End session** on the admin page) to stop the server; the CSVs are exported automatically on shutdown.
 
 ---
 

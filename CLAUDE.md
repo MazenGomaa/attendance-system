@@ -28,7 +28,7 @@ Three Python files do everything; no database, no migrations, no build pipeline.
 **`app.py`** — Starlette application mounted by `main.py` (deliberately not FastAPI: no pydantic, so Termux installs need no Rust). Routes register via the `@_route(path, method)` decorator and must return `Response` objects, not dicts:
 - `/api/init` (POST): single round-trip on page load; returns session info + page token + existing record for prefill.
 - `/submit` (POST): create-or-edit path; the resolve → dedup → write block has **no `await` inside it**, which is the atomicity guarantee — the single-threaded event loop cannot interleave two submissions mid-block. Identity = deviceId/cookie, else existing ID **and** matching name (`name_key()` folds Arabic spelling variants); a taken ID with a different name is refused and logged. Shared IP / GPS proximity must never select a record (CGNAT students share IPs) — they are export flags only. Every outcome goes through `_log()`.
-- `/admin/*`: state read, reset-devices, new-session, export, download (`?file=final|raw|audited`). Admin access is gated by `_check_admin()` which checks password cookie/header first, then falls back to loopback/trusted-CIDR check (Host must be `localhost` or an IP: DNS-rebinding guard) when no password is set. Admin POSTs must send `X-Requested-With: att-admin` (CSRF; enforced in `_SecurityHeaders`).
+- `/admin/*`: state read, reset-devices, new-session, export, download (`?file=final|raw|audited`), end-session (sets `config.ended` so `/submit` returns 410, exports, copies to Downloads, then calls `config.request_shutdown`, which `main.py` wires to `uvicorn.Server.should_exit`). Admin access is gated by `_check_admin()` which checks password cookie/header first, then falls back to loopback/trusted-CIDR check (Host must be `localhost` or an IP: DNS-rebinding guard) when no password is set. Admin POSTs must send `X-Requested-With: att-admin` (CSRF; enforced in `_SecurityHeaders`).
 - Lifespan hook: exports CSVs on shutdown (Ctrl+C).
 
 **`run.py`** — cross-platform bootstrap (the real entry point):
@@ -40,7 +40,7 @@ Three Python files do everything; no database, no migrations, no build pipeline.
 - Interactive CLI prompts → populates `config` fields.
 - Optionally starts 1–4 Cloudflare Quick Tunnels (`cloudflared` binary, found via PATH or next to `main.py`).
 - Generates QR codes (ASCII + PNG via `qrcode[pil]`, or pure-Python `pypng` on Termux).
-- Calls `uvicorn.run(app, workers=1)`.
+- Runs `uvicorn.Server(...workers=1)` and sets `config.request_shutdown`; on exit terminates tunnels and runs `termux-wake-unlock` if present.
 
 **`static/`** — plain HTML/CSS/JS, no framework, no bundler:
 - `index.html` + `index.js`: student submission form (RTL Arabic, calls `/api/init` then `/submit`).

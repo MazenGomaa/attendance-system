@@ -290,14 +290,24 @@ def main():
         img = save_qr(local_url, "Student URL (LAN)")
         open_file(img)
 
+    server = uvicorn.Server(uvicorn.Config(app, host="0.0.0.0", port=PORT, workers=1,
+                                           log_level="warning"))
+    # Lets the admin page's "End session" button stop the server cleanly on every
+    # OS (same path as Ctrl+C: the lifespan hook exports, then we land in finally).
+    config.request_shutdown = lambda: setattr(server, "should_exit", True)
     try:
-        uvicorn.run(app, host="0.0.0.0", port=PORT, workers=1, log_level="warning")
+        server.run()
     finally:
         for p in procs:
             try:
                 p.terminate()
             except Exception:
                 pass
+        if shutil.which("termux-wake-unlock"):
+            # Let the phone sleep normally again (pairs with termux-wake-lock).
+            subprocess.run(["termux-wake-unlock"], check=False)
+        print("\n[session] ended — server and tunnels stopped. CSVs are in "
+              f"{os.path.join(os.path.dirname(os.path.abspath(__file__)), 'exports')}")
 
 
 if __name__ == "__main__":

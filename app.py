@@ -13,6 +13,7 @@ import ipaddress
 import math
 import os
 import re
+import shutil
 import time as _time
 import uuid
 from contextlib import asynccontextmanager
@@ -573,6 +574,8 @@ async def submit(request: Request):
     CREATE-OR-EDIT. The resolve+dedup+mutation block below has no await inside,
     so the single-threaded event loop cannot interleave two submissions mid-block.
     """
+    if config.ended:
+        return reject("انتهى تسجيل الحضور / Attendance is closed", 410)
     try:
         if request.headers.get("content-type", "").startswith("application/json"):
             data = await request.json()
@@ -922,6 +925,56 @@ async def admin_export(request: Request):
     return JSONResponse({"ok": True, "final": os.path.basename(final),
                          "raw": os.path.basename(final).replace("_Final.csv", "_Raw.csv"),
                          "audited": os.path.basename(audit) if audit else None})
+
+
+def downloads_dir():
+    """Phone/PC Downloads folder, or None. On Termux it exists only after
+    `termux-setup-storage` has been run once."""
+    for d in (os.path.expanduser("~/storage/downloads"), os.path.expanduser("~/Downloads")):
+        if os.path.isdir(d):
+            return d
+    return None
+
+
+def _copy_exports(paths):
+    dest = downloads_dir()
+    if dest is None:
+        return None, []
+    copied = []
+    for p in paths:
+        try:
+            shutil.copy2(p, dest)
+            copied.append(os.path.basename(p))
+        except OSError as e:
+            print(f"[end-session] could not copy {p}: {e}")
+    return dest, copied
+
+
+@_route("/admin/end-session", "POST")
+async def admin_end_session(request: Request):
+    """
+    Close attendance from the admin page: refuse new submissions, export all
+    CSVs, copy them to Downloads, then stop the server (and with it the tunnels).
+    """
+    if not _check_admin(request):
+        return reject("unauthorized", 401)
+    config.ended = True   # from here on /submit refuses; no await before this line
+    try:
+        final, audit = await asyncio.to_thread(export_csv, "end-session")
+    except Exception as e:
+        config.ended = False   # nothing saved: keep the session open
+        return JSONResponse({"ok": False, "error": f"export failed: {e}"}, status_code=500)
+    files = [final, final.replace("_Final.csv", "_Raw.csv")] + ([audit] if audit else [])
+    dest, copied = await asyncio.to_thread(_copy_exports, files)
+    if dest:
+        print(f"[end-session] copied {len(copied)} file(s) to {dest}")
+    stopping = config.request_shutdown is not None
+    if stopping:
+        # Give the response a moment to reach the browser before shutting down.
+        asyncio.get_running_loop().call_later(1.0, config.request_shutdown)
+    return JSONResponse({"ok": True, "files": [os.path.basename(f) for f in files],
+                         "exports_dir": EXPORT_DIR, "copied_to": dest, "copied": copied,
+                         "stopping": stopping})
 
 
 @_route("/admin/download", "GET")
