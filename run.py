@@ -80,8 +80,17 @@ def _missing_packages() -> list:
 # Termux/Android: PyPI has no prebuilt wheels for this platform, so anything
 # with native code compiles from source. Install only the lean set (no
 # uvicorn[standard] → uvloop/httptools/watchfiles, no Pillow; pure-Python pypng
-# writes the QR PNGs instead); pydantic-core still needs Rust (`pkg install rust binutils`).
-TERMUX_PACKAGES = ["fastapi", "uvicorn", "qrcode", "pypng", "python-multipart"]
+# writes the QR PNGs instead).
+TERMUX_PACKAGES = ["uvicorn", "qrcode", "pypng", "python-multipart"]
+# Pydantic v1 is pure Python, so no Rust is needed. FastAPI 0.125 is the last
+# release that accepts it, and pydantic v1 does not run on Python 3.14+.
+TERMUX_PURE = ["fastapi<0.126", "pydantic<2"]
+# Python 3.14+: pydantic v2 only, whose pydantic-core compiles with Rust.
+TERMUX_RUST = ["fastapi"]
+
+
+def termux_needs_rust() -> bool:
+    return sys.version_info >= (3, 14)
 
 
 def is_termux() -> bool:
@@ -91,7 +100,7 @@ def is_termux() -> bool:
 def _termux_env() -> dict:
     from shutil import which
     if not which("rustc"):
-        print("[setup] Rust is required to build pydantic-core on Termux. Run:")
+        print("[setup] On Python 3.14+, Rust is required to build pydantic-core. Run:")
         print("          pkg install rust binutils")
         print("        then re-run:  python run.py")
         sys.exit(1)
@@ -109,11 +118,14 @@ def _termux_env() -> dict:
 def _install_deps():
     req = os.path.join(HERE, "requirements.txt")
     termux = is_termux()
-    env = _termux_env() if termux else None
+    rust = termux and termux_needs_rust()
+    env = _termux_env() if rust else None
     print("[setup] installing dependencies (may take a minute on first run) …")
-    if termux:
-        print("[setup] Termux detected: compiling pydantic-core from source, "
+    if rust:
+        print("[setup] Termux on Python 3.14+: compiling pydantic-core from source, "
               "this can take 10-30 min. Keep Termux open (termux-wake-lock).")
+    elif termux:
+        print("[setup] Termux detected: installing the pure-Python set (no Rust needed).")
     try:
         subprocess.check_call(
             [venv_python(), "-m", "pip", "install", "--upgrade", "pip", "--quiet"]
@@ -121,7 +133,8 @@ def _install_deps():
     except Exception:
         pass  # pip upgrade is best-effort
     if termux:
-        subprocess.check_call([venv_python(), "-m", "pip", "install", *TERMUX_PACKAGES], env=env)
+        pkgs = TERMUX_PACKAGES + (TERMUX_RUST if rust else TERMUX_PURE)
+        subprocess.check_call([venv_python(), "-m", "pip", "install", *pkgs], env=env)
     else:
         subprocess.check_call([venv_python(), "-m", "pip", "install", "-r", req])
     open(MARK, "w").close()

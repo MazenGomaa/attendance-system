@@ -20,7 +20,7 @@ python run.py
 python3 run.py
 
 # Termux (Android)
-pkg install python rust binutils
+pkg install python
 python run.py
 ```
 
@@ -44,14 +44,19 @@ No global installs. Everything lives inside `.venv` in the project folder. To re
 ### Termux (Android)
 
 ```bash
-pkg install python rust binutils
-termux-wake-lock          # keep the phone from sleeping during the build
+pkg install python
 python run.py
 ```
 
-PyPI has no prebuilt wheels for Android, so `run.py` detects Termux and installs a lean set (`fastapi uvicorn qrcode pypng python-multipart`) instead of `requirements.txt` — no `uvicorn[standard]` extras and no Pillow. `pydantic-core` still compiles from source, which needs Rust and takes **10–30 minutes** on the first run; `run.py` exits with a hint if `rustc` is missing.
+PyPI has no prebuilt wheels for Android, so `run.py` detects Termux and installs a lean, pure-Python set instead of `requirements.txt`: `fastapi<0.126`, `pydantic<2`, `uvicorn`, `qrcode`, `pypng`, `python-multipart`. Nothing needs compiling, so it installs in about a minute. Pydantic v1 is used because v2's `pydantic-core` is written in Rust. QR PNGs are written with `pypng` instead of Pillow.
 
-Pillow is skipped too; QR PNGs are written with the pure-Python `pypng` instead.
+**Python 3.14+ only:** pydantic v1 doesn't run there, so `run.py` falls back to building `pydantic-core` from source. That needs Rust and takes 10–30 minutes:
+
+```bash
+pkg install rust binutils
+termux-wake-lock          # keep the phone from sleeping during the build
+python run.py
+```
 
 ### Offline rooms
 
