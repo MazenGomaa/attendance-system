@@ -81,6 +81,9 @@ class AttendanceApp : Application() {
                         "saveImage" -> result.success(saveImage(
                             call.argument<ByteArray>("bytes")!!,
                             call.argument<String>("name")!!))
+                        "saveToDownloads" -> result.success(saveToDownloads(
+                            call.argument<String>("path")!!,
+                            call.argument<String>("mime") ?: "text/csv"))
                         "deviceInfo" -> result.success(deviceInfo())
                         else -> result.notImplemented()
                     }
@@ -112,6 +115,31 @@ class AttendanceApp : Application() {
         val f = java.io.File(dir, name)
         f.writeBytes(bytes)
         return f.absolutePath
+    }
+
+    /** Copies an exported file into Download/Attendance; returns where it went. */
+    private fun saveToDownloads(path: String, mime: String): String {
+        val src = java.io.File(path)
+        val name = src.name
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val values = ContentValues().apply {
+                put(MediaStore.Downloads.DISPLAY_NAME, name)
+                put(MediaStore.Downloads.MIME_TYPE, mime)
+                put(MediaStore.Downloads.RELATIVE_PATH,
+                    Environment.DIRECTORY_DOWNLOADS + "/Attendance")
+            }
+            val uri = contentResolver.insert(
+                MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: throw IllegalStateException("MediaStore insert failed")
+            contentResolver.openOutputStream(uri)!!.use { out ->
+                src.inputStream().use { it.copyTo(out) }
+            }
+            return "Download/Attendance/$name"
+        }
+        val dir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)!!
+        val dest = java.io.File(dir, name)
+        src.copyTo(dest, overwrite = true)
+        return dest.absolutePath
     }
 
     private fun ignoringBatteryOptimizations(): Boolean {

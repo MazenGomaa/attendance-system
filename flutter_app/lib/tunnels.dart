@@ -160,10 +160,11 @@ class TunnelManager extends ChangeNotifier {
       final sw = Stopwatch()..start();
       final client = HttpClient()..connectionTimeout = const Duration(seconds: 15);
       try {
-        final req = await client.getUrl(Uri.parse('$url/ping'));
+        // /favicon.ico answers 204 with no body: the cheapest end-to-end probe.
+        final req = await client.getUrl(Uri.parse('$url/favicon.ico'));
         final res = await req.close().timeout(const Duration(seconds: 20));
         await res.drain<void>();
-        if (res.statusCode == 200) {
+        if (res.statusCode == 204 || res.statusCode == 200) {
           t.checksOk++;
           t.lastLatencyMs = sw.elapsedMilliseconds;
           log('check${t.index}', 'OK ${res.statusCode} in ${sw.elapsedMilliseconds} ms');

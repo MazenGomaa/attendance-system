@@ -26,6 +26,10 @@ class HostPlatform {
   static Future<String> saveImage(Uint8List bytes, String name) async =>
       (await _ch.invokeMethod<String>('saveImage', {'bytes': bytes, 'name': name}))!;
 
+  /// Copies an exported file into Download/Attendance; returns where it went.
+  static Future<String> saveToDownloads(String path, {String mime = 'text/csv'}) async =>
+      (await _ch.invokeMethod<String>('saveToDownloads', {'path': path, 'mime': mime}))!;
+
   static Future<Map<String, Object?>> deviceInfo() async {
     final m = await _ch.invokeMapMethod<String, Object?>('deviceInfo');
     return m ?? const {};

@@ -7,6 +7,10 @@ on:
     paths:
       - 'flutter_app/**'
       - 'static/**'
+      - 'app.py'
+      - 'state.py'
+      - 'requirements.txt'
+      - 'tests/**'
       - '.github/workflows/android-apk.yml'
   workflow_dispatch:
 
@@ -96,12 +100,26 @@ jobs:
           channel: stable
           cache: true
 
+      - name: Bundle student/admin pages from static/
+        run: flutter_app/tool/sync_static.sh
+
       - name: Test
         working-directory: flutter_app
         run: |
           flutter pub get
           flutter analyze
           flutter test
+
+      # The Python server and the app's Dart server must behave identically:
+      # same scenario checks over HTTP, and identical CSV exports.
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Parity tests (Python server vs Dart server)
+        run: |
+          python -m pip install --quiet -r requirements.txt
+          PYTHON=python DART=dart tests/parity.sh
 
       - name: Build APK (arm64)
         working-directory: flutter_app

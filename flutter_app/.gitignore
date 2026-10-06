@@ -49,3 +49,7 @@ app.*.map.json
 
 # cloudflared is built for Android by CI and dropped in here before the APK build.
 /android/app/src/main/jniLibs/
+
+# Copied from ../static by tool/sync_static.sh (CI runs it before building).
+/assets/web/*
+!/assets/web/.gitkeep

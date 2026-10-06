@@ -14,7 +14,17 @@ python3 run.py
 
 `run.py` is the only entry point. On first run it checks Python 3.9+, creates `.venv`, installs deps from `requirements.txt`, and auto-downloads the correct `cloudflared` binary for the current OS/CPU. Subsequent runs detect and prompt to fix any missing packages, then launch immediately.
 
-Do **not** run `main.py` directly unless the venv is already activated — it has no bootstrap logic. There are no tests and no build step. The app serves on port 8000 (overridden by `PORT` env var).
+Do **not** run `main.py` directly unless the venv is already activated — it has no bootstrap logic. The app serves on port 8000 (overridden by `PORT` env var).
+
+## Tests
+
+```bash
+tests/parity.sh          # PYTHON=... DART=... (Flutter SDK's dart); runs everything below
+python tests/scenarios.py --base http://127.0.0.1:8765 [--mode password|nopassword]
+cd flutter_app && flutter test
+```
+
+`tests/scenarios.py` is a black-box HTTP spec (stdlib only) run against both the Python server (`tests/serve_python.py`) and the Dart server (`flutter_app/bin/serve.dart`); `parity.sh` also checks the two servers' CSV exports are identical. CI (`.github/workflows/android-apk.yml`) runs it on every push touching either server.
 
 ## Architecture
 
@@ -53,7 +63,11 @@ Three Python files do everything; no database, no migrations, no build pipeline.
 - `<session>_Final.csv`: one row per student, plus Edits, Maps_Link, SameIP_Count/SameIP_IDs, SameName_IDs.
 - `<session>_Audited.csv`: Final's columns plus Distance_km, Status (written only when geofencing is on).
 
+**`flutter_app/`** — Android host app (Flutter): runs the same server, ported to Dart in `lib/server/` (pure `dart:io`, no Flutter imports), plus bundled `cloudflared` tunnels under a foreground service. Built by CI into a GitHub pre-release APK; see `flutter_app/README.md`. The student/admin pages come from `static/` (copied in by `flutter_app/tool/sync_static.sh`).
+
 ## Key design constraints
+
+- **Two servers, one behaviour.** `app.py` and `flutter_app/lib/server/` must stay in step: any change to endpoints, messages, identity rules or CSV columns goes into both, with a check in `tests/scenarios.py`; `tests/parity.sh` must pass. The Dart server also writes a journal (`lib/server/model.dart` `Journal`) so the app can resume after being killed; keep every state change journaled.
 
 - **`workers=1` is mandatory.** Multiple workers = multiple processes = split in-memory state = broken dedup. Do not add multi-process concurrency.
 - **Atomicity via event loop.** The submit critical section avoids `await`, relying on cooperative multitasking to prevent races. Any refactor that adds an `await` inside the `resolve → dedup → write` block in `/submit` breaks this.
@@ -61,3 +75,4 @@ Three Python files do everything; no database, no migrations, no build pipeline.
 - **Anti-curl page token**: HMAC signed by `config.page_secret` (generated fresh each run), valid for ~90 s (3 × 30 s buckets). `/submit` rejects requests without one.
 - **Admin password** stored as `sha256(salt + pw)` and compared with `hmac.compare_digest`. Salt and hash live only in `config` (memory) for the run.
 - **Arabic name validation**: 4+ whitespace-separated tokens, each matching `[؀-ۿ]+`, max 100 chars total.
+- **Student IDs**: Arabic-Indic/Persian digits are normalised to ASCII (`normalize_digits`) before validation, on the page and in both servers.

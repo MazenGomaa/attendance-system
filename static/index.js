@@ -1,5 +1,10 @@
 'use strict';
 const ID_RE = /^\d{1,20}$/;
+// Arabic-Indic (٠-٩) and Persian (۰-۹) digits -> ASCII, as the server does.
+function normDigits(v) {
+  return v.replace(/[\u0660-\u0669]/g, d => String(d.charCodeAt(0) - 0x0660))
+          .replace(/[\u06F0-\u06F9]/g, d => String(d.charCodeAt(0) - 0x06F0));
+}
 const ARABIC_WORD = /^[\u0600-\u06FF]+$/;
 const MIN_PARTS = 4;
 
@@ -24,7 +29,7 @@ function nameOk(v) {
 }
 function locOk() { return !needGeo || coords !== null; }
 function liveCheck() {
-  const idGood = ID_RE.test(idEl.value.trim());
+  const idGood = ID_RE.test(normDigits(idEl.value.trim()));
   const nameGood = nameOk(nameEl.value);
   document.getElementById('idHint').textContent = idEl.value && !idGood ? 'أرقام فقط' : '';
   document.getElementById('idHint').className = 'hint' + (idEl.value && !idGood ? ' bad' : '');
@@ -176,7 +181,7 @@ btn.addEventListener('click', async () => {
   sending = true; btn.disabled = true;
   const prevLabel = btn.textContent; btn.textContent = 'جارٍ الإرسال…';
   msg.className = ''; msg.textContent = '';
-  const body = { id: idEl.value.trim(), name: nameEl.value.trim().replace(/\s+/g, ' '),
+  const body = { id: normDigits(idEl.value.trim()), name: nameEl.value.trim().replace(/\s+/g, ' '),
                  deviceId, page_token: pageToken };
   if (needGeo && coords) { body.lat = coords.lat; body.lng = coords.lng; body.accuracy = coords.acc; }
   try {

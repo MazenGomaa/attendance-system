@@ -9,10 +9,8 @@ import 'package:share_plus/share_plus.dart';
 import 'debug_log.dart';
 import 'platform.dart';
 import 'qr_image.dart';
-import 'test_server.dart';
+import 'session.dart';
 import 'tunnels.dart';
-
-const int kPort = 8000;
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -32,101 +30,6 @@ class HostApp extends StatelessWidget {
   }
 }
 
-/// Owns the session: foreground service + local server + tunnels.
-class HostController extends ChangeNotifier {
-  final TestServer server = TestServer(kPort);
-  TunnelManager? tunnels;
-  Map<String, Object?> device = const {};
-  String? binaryPath;
-  bool busy = false;
-  Timer? _heartbeat;
-  DateTime? _lastBeat;
-
-  bool get running => server.running;
-
-  Future<void> refreshDevice() async {
-    try {
-      device = await HostPlatform.deviceInfo();
-    } catch (e) {
-      log('app', 'deviceInfo failed: $e');
-    }
-    notifyListeners();
-  }
-
-  Future<void> start(int tunnelCount) async {
-    if (busy || running) return;
-    busy = true;
-    notifyListeners();
-    try {
-      await HostPlatform.requestNotifications();
-      final paths = await HostPlatform.paths();
-      final logDir = Directory('${paths['filesDir']}/logs')..createSync(recursive: true);
-      final stamp = DateTime.now().toIso8601String().substring(0, 19).replaceAll(':', '-');
-      DebugLog.instance.openFile('${logDir.path}/session-$stamp.log');
-      binaryPath = '${paths['nativeLibDir']}/libcloudflared.so';
-      final bin = File(binaryPath!);
-      log('app', 'cloudflared: $binaryPath '
-          '(${bin.existsSync() ? '${bin.lengthSync()} bytes' : 'MISSING'})');
-      await HostPlatform.startService('Starting…');
-      await server.start();
-      final tm = TunnelManager(
-          binary: binaryPath!, homeDir: paths['filesDir']!, localPort: kPort);
-      tm.addListener(_onTunnelChange);
-      tunnels = tm;
-      await tm.start(tunnelCount);
-      _startHeartbeat();
-      log('app', 'session started with $tunnelCount tunnel(s)');
-    } catch (e) {
-      log('app', 'start failed: $e');
-    } finally {
-      busy = false;
-      await refreshDevice();
-    }
-  }
-
-  /// Logs a line every minute and flags late timers: if Android froze the
-  /// process with the screen off, the gap shows up here with its length.
-  void _startHeartbeat() {
-    _lastBeat = DateTime.now();
-    _heartbeat = Timer.periodic(const Duration(seconds: 60), (_) {
-      final now = DateTime.now();
-      final gap = now.difference(_lastBeat!).inSeconds;
-      _lastBeat = now;
-      final up = now.difference(server.startedAt!).inMinutes;
-      if (gap > 90) {
-        log('heartbeat', 'WARNING: timer ${gap - 60} s late — app was suspended?');
-      }
-      log('heartbeat', 'alive, up $up min, visits ${server.hits}, pings ${server.pings}');
-      _updateNotification();
-    });
-  }
-
-  void _onTunnelChange() {
-    _updateNotification();
-    notifyListeners();
-  }
-
-  void _updateNotification() {
-    final tm = tunnels;
-    if (tm == null || !running) return;
-    final up = tm.tunnels.where((t) => t.state == TunnelState.up).length;
-    final ok = tm.tunnels.fold<int>(0, (a, t) => a + t.checksOk);
-    final bad = tm.tunnels.fold<int>(0, (a, t) => a + t.checksFailed);
-    final mins = DateTime.now().difference(server.startedAt!).inMinutes;
-    HostPlatform.updateNotification(
-        'Up $mins min · $up/${tm.tunnels.length} tunnels · checks $ok ok / $bad failed');
-  }
-
-  Future<void> stop() async {
-    _heartbeat?.cancel();
-    await tunnels?.stop();
-    await server.stop();
-    await HostPlatform.stopService();
-    log('app', 'session stopped');
-    await refreshDevice();
-  }
-}
-
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
 
@@ -136,7 +39,10 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   final HostController c = HostController();
-  int tunnelCount = 1;
+  final SessionSettings settings = SessionSettings();
+  final _course = TextEditingController();
+  final _radius = TextEditingController(text: '0.5');
+  final _password = TextEditingController();
   Timer? _tick;
 
   @override
@@ -144,8 +50,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     c.addListener(_redraw);
-    c.server.addListener(_redraw);
     c.refreshDevice();
+    c.findUnfinished();
     _tick = Timer.periodic(const Duration(seconds: 1), (_) {
       if (c.running) _redraw();
     });
@@ -169,13 +75,42 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     super.dispose();
   }
 
+  void _start({UnfinishedSession? resume}) {
+    settings
+      ..course = _course.text
+      ..radiusKm = double.tryParse(_radius.text.trim()) ?? 0.5
+      ..password = _password.text;
+    if (settings.radiusKm < 0.05) settings.radiusKm = 0.05;
+    c.start(settings, resume: resume);
+  }
+
+  Future<void> _confirmEnd() async {
+    final yes = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('End the session?'),
+        content: const Text('• Students can no longer submit\n'
+            '• The CSVs are saved to Download/Attendance\n'
+            '• The tunnels stop (the student links stop working)'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red.shade700),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('End session'),
+          ),
+        ],
+      ),
+    );
+    if (yes == true) await c.endSession();
+  }
+
   @override
   Widget build(BuildContext context) {
-    final tm = c.tunnels;
     final batteryOk = c.device['batteryOptimizationIgnored'] == true;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Attendance Host · Phase 0'),
+        title: const Text('Attendance Host'),
         actions: [
           IconButton(
             tooltip: 'Debug',
@@ -185,40 +120,15 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           ),
         ],
       ),
-      // Start/Stop live in a fixed bar above the system navigation buttons, so
-      // they stay reachable however many tunnel cards the list holds.
+      // Actions live in a fixed bar above the system navigation buttons.
       bottomNavigationBar: SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-          child: c.running
-              ? Row(children: [
-                  if ((tm?.tunnels.where((t) => t.url != null).length ?? 0) > 1) ...[
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        icon: const Icon(Icons.share),
-                        label: const Text('Share all QR'),
-                        onPressed: () => shareQrs(tm!.tunnels
-                            .where((t) => t.url != null)
-                            .map((t) => (t.url!, 'Tunnel ${t.index}'))
-                            .toList()),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                  ],
-                  Expanded(
-                    child: FilledButton.icon(
-                      style: FilledButton.styleFrom(backgroundColor: Colors.red.shade700),
-                      icon: const Icon(Icons.stop),
-                      label: const Text('Stop session'),
-                      onPressed: c.stop,
-                    ),
-                  ),
-                ])
-              : FilledButton.icon(
-                  icon: const Icon(Icons.play_arrow),
-                  label: Text(c.busy ? 'Starting…' : 'Start test session'),
-                  onPressed: c.busy ? null : () => c.start(tunnelCount),
-                ),
+          child: c.running ? _runningActions() : FilledButton.icon(
+            icon: const Icon(Icons.play_arrow),
+            label: Text(c.busy ? 'Starting…' : 'Start session'),
+            onPressed: c.busy ? null : () => _start(),
+          ),
         ),
       ),
       body: ListView(
@@ -232,46 +142,203 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 title: const Text('Battery optimisation is ON'),
                 subtitle: const Text('Android may freeze the server with the screen off. '
                     'Tap to allow running in the background.'),
-                onTap: () async {
-                  await HostPlatform.requestBatteryExemption();
-                },
+                onTap: HostPlatform.requestBatteryExemption,
               ),
             ),
-          if (!c.running) ...[
-            const Text('Tunnels'),
-            const SizedBox(height: 8),
-            SegmentedButton<int>(
-              segments: [for (var i = 1; i <= 4; i++) ButtonSegment(value: i, label: Text('$i'))],
-              selected: {tunnelCount},
-              onSelectionChanged: (s) => setState(() => tunnelCount = s.first),
-            ),
-            const SizedBox(height: 12),
-            const Text('Closing or swiping the app away keeps the session running. '
-                'Only "Stop session" ends it.',
-                style: TextStyle(color: Colors.white70, fontSize: 13)),
-          ] else ...[
-            _statusCard(),
-            for (final t in tm?.tunnels ?? const <Tunnel>[]) _tunnelCard(t),
-          ],
+          if (c.lastEnd != null) _endCard(c.lastEnd!),
+          if (c.running) ..._runningView() else ..._setupView(),
         ],
       ),
     );
   }
 
-  Widget _statusCard() {
-    final up = DateTime.now().difference(c.server.startedAt!);
-    String two(int v) => v.toString().padLeft(2, '0');
-    final upText = '${up.inHours}:${two(up.inMinutes % 60)}:${two(up.inSeconds % 60)}';
+  Widget _runningActions() {
+    final tm = c.tunnels;
+    final withUrl = tm?.tunnels.where((t) => t.url != null).toList() ?? const <Tunnel>[];
+    return Row(children: [
+      if (withUrl.isNotEmpty) ...[
+        Expanded(
+          child: OutlinedButton.icon(
+            icon: const Icon(Icons.share),
+            label: Text(withUrl.length > 1 ? 'Share all QR' : 'Share QR'),
+            onPressed: () => shareQrs(
+                [for (final t in withUrl) (t.url!, 'Tunnel ${t.index}')]),
+          ),
+        ),
+        const SizedBox(width: 12),
+      ],
+      Expanded(
+        child: FilledButton.icon(
+          style: FilledButton.styleFrom(backgroundColor: Colors.red.shade700),
+          icon: const Icon(Icons.stop),
+          label: const Text('End session'),
+          onPressed: _confirmEnd,
+        ),
+      ),
+    ]);
+  }
+
+  // ---------------------------------------------------------------- setup --
+
+  List<Widget> _setupView() {
+    final u = c.unfinished;
+    return [
+      if (u != null)
+        Card(
+          color: Colors.blueGrey.shade800,
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text('Unfinished session found',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+              const SizedBox(height: 4),
+              Text('"${u.course}" · ${u.students} students · started '
+                  '${u.startedAt.toString().substring(0, 16)}\n'
+                  'The app was closed before this session ended.'),
+              const SizedBox(height: 8),
+              Wrap(spacing: 8, children: [
+                FilledButton(
+                  onPressed: c.busy ? null : () => _start(resume: u),
+                  child: const Text('Resume it'),
+                ),
+                OutlinedButton(
+                  onPressed: () => c.closeUnfinished(u),
+                  child: const Text('End it & save CSVs'),
+                ),
+              ]),
+              const Text('Resume uses the settings below (location, password, tunnels).',
+                  style: TextStyle(color: Colors.white60, fontSize: 12)),
+            ]),
+          ),
+        ),
+      TextField(
+        controller: _course,
+        decoration: const InputDecoration(labelText: 'Course / subject name',
+            hintText: 'e.g. Anatomy Lecture 5'),
+      ),
+      const SizedBox(height: 8),
+      SwitchListTile(
+        contentPadding: EdgeInsets.zero,
+        title: const Text('Require location (GPS audit)'),
+        subtitle: const Text('Students must allow location; far-away ones are flagged.'),
+        value: settings.geofence,
+        onChanged: (v) => setState(() => settings.geofence = v),
+      ),
+      if (settings.geofence)
+        TextField(
+          controller: _radius,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          decoration: const InputDecoration(labelText: 'Audit radius (km)',
+              helperText: 'Flag anyone farther than this from where most students are'),
+        ),
+      const SizedBox(height: 8),
+      TextField(
+        controller: _password,
+        obscureText: true,
+        decoration: const InputDecoration(labelText: 'Web dashboard password (optional)',
+            helperText: 'Only for opening the dashboard in a browser; this app needs none'),
+      ),
+      const SizedBox(height: 16),
+      const Text('Tunnels (each handles ~200 students at once)'),
+      const SizedBox(height: 8),
+      SegmentedButton<int>(
+        segments: [for (var i = 1; i <= 4; i++) ButtonSegment(value: i, label: Text('$i'))],
+        selected: {settings.tunnels},
+        onSelectionChanged: (s) => setState(() => settings.tunnels = s.first),
+      ),
+      const SizedBox(height: 12),
+      const Text('Closing or swiping the app away keeps the session running. '
+          'Only "End session" ends it.',
+          style: TextStyle(color: Colors.white70, fontSize: 13)),
+    ];
+  }
+
+  Widget _endCard(EndResult r) {
     return Card(
-      child: ListTile(
-        leading: const Icon(Icons.dns, color: Colors.greenAccent),
-        title: Text('Server up $upText'),
-        subtitle: Text('Page visits ${c.server.hits} · health pings ${c.server.pings}\n'
-            'Background service: ${c.device['serviceRunning'] == true ? 'running' : 'NOT running'}'),
-        isThreeLine: true,
+      color: r.error != null ? Colors.red.shade900 : Colors.green.shade900,
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(r.error != null ? 'End session failed' : 'Session ended',
+              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+          const SizedBox(height: 4),
+          if (r.error != null) Text(r.error!),
+          if (r.saved.isNotEmpty) Text('Saved to Downloads:\n${r.saved.join('\n')}'),
+          if (r.error == null && r.saved.isEmpty)
+            const Text('Could not save to Downloads; use Share below.'),
+          if (r.exportPaths.isNotEmpty)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                icon: const Icon(Icons.share),
+                label: const Text('Share CSVs'),
+                onPressed: () => SharePlus.instance.share(ShareParams(
+                    files: [for (final p in r.exportPaths) XFile(p, mimeType: 'text/csv')])),
+              ),
+            ),
+        ]),
       ),
     );
   }
+
+  // -------------------------------------------------------------- running --
+
+  List<Widget> _runningView() {
+    final st = c.server!.stateSnapshot();
+    final up = DateTime.now().difference(c.runningSince!);
+    String two(int v) => v.toString().padLeft(2, '0');
+    final geo = st['geofence'] == true;
+    final recent = (st['recent'] as List).cast<Map<String, Object?>>();
+    return [
+      Text('${st['course']} · up ${up.inHours}:${two(up.inMinutes % 60)}:${two(up.inSeconds % 60)}',
+          style: const TextStyle(color: Colors.white70)),
+      const SizedBox(height: 8),
+      Wrap(spacing: 8, runSpacing: 8, children: [
+        _stat('Students', '${st['count']}'),
+        _stat('Submissions', '${st['submissions']}'),
+        _stat('Edits / conflicts', '${(st['merges'] as List).length}'),
+        if (geo) _stat('Out of bounds', '${st['out_of_bounds']}',
+            alert: (st['out_of_bounds'] as int) > 0),
+        _stat('On a shared IP', '${st['shared_ip']}'),
+      ]),
+      const SizedBox(height: 8),
+      for (final t in c.tunnels?.tunnels ?? const <Tunnel>[]) _tunnelCard(t),
+      const SizedBox(height: 8),
+      Text('Recent submissions${geo ? ' · distance from the hall' : ''}',
+          style: const TextStyle(fontWeight: FontWeight.bold)),
+      if (recent.isEmpty)
+        const Padding(padding: EdgeInsets.all(8), child: Text('None yet.')),
+      for (final x in recent.take(15))
+        ListTile(
+          dense: true,
+          contentPadding: EdgeInsets.zero,
+          title: Text('${x['name']}', textDirection: TextDirection.rtl),
+          subtitle: Text('${x['id']} · ${'${x['timestamp']}'.substring(11)}'
+              '${x['edited'] == true ? ' · edited' : ''}'
+              '${x['shared_ip'] == true ? ' · shared IP' : ''}'),
+          trailing: geo
+              ? Text(_dist(x['dist_m'] as int?) + (x['out'] == true ? ' ⚠' : ''),
+                  style: TextStyle(color: x['out'] == true ? Colors.redAccent : null))
+              : null,
+        ),
+    ];
+  }
+
+  String _dist(int? m) => m == null ? '—' : (m >= 1000 ? '${(m / 1000).toStringAsFixed(2)} km' : '$m m');
+
+  Widget _stat(String label, String value, {bool alert = false}) => SizedBox(
+        width: 104,
+        child: Card(
+          child: Padding(
+            padding: const EdgeInsets.all(8),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(value, style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold,
+                  color: alert ? Colors.redAccent : null)),
+              Text(label, style: const TextStyle(fontSize: 11, color: Colors.white70)),
+            ]),
+          ),
+        ),
+      );
 
   Widget _tunnelCard(Tunnel t) {
     final color = switch (t.state) {
@@ -292,15 +359,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               Text('Tunnel ${t.index}: ${t.state.name}',
                   style: const TextStyle(fontWeight: FontWeight.bold)),
               const Spacer(),
-              Text('restarts ${t.restarts}'),
+              Text('checks ${t.checksOk}✓ ${t.checksFailed}✗'),
             ]),
-            const SizedBox(height: 6),
-            Text('Checks: ${t.checksOk} ok · ${t.checksFailed} failed'
-                '${t.lastLatencyMs != null ? ' · last ${t.lastLatencyMs} ms' : ''}'),
             if (t.url != null) ...[
-              const SizedBox(height: 8),
+              const SizedBox(height: 6),
               SelectableText(t.url!, style: const TextStyle(color: Colors.lightBlueAccent)),
-              Row(children: [
+              Wrap(children: [
                 TextButton.icon(
                   icon: const Icon(Icons.copy, size: 18),
                   label: const Text('Copy'),
@@ -319,6 +383,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 ),
               ]),
             ],
+            if (t.restarts > 0) Text('restarted ${t.restarts}×',
+                style: const TextStyle(color: Colors.amber, fontSize: 12)),
             if (t.lastError != null && t.state != TunnelState.up)
               Text(t.lastError!, style: const TextStyle(color: Colors.redAccent, fontSize: 12)),
           ],
