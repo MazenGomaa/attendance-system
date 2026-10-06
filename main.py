@@ -43,6 +43,7 @@ def detect_local_ip() -> str:
 
 
 def _find_cloudflared():
+    # PATH first: on Termux that's the pkg build, which resolves DNS correctly.
     p = shutil.which("cloudflared")
     if p:
         return p
@@ -67,7 +68,9 @@ def start_tunnels(port: int, count: int, timeout: float = 30.0):
               "LAN-only. Install it for mobile-data clients.")
         return [], []
 
-    pat = re.compile(r"https://[-\w]+\.trycloudflare\.com")
+    # Skip api.trycloudflare.com: it's the endpoint cloudflared calls to *request*
+    # a tunnel, and it shows up in the error line when that request fails.
+    pat = re.compile(r"https://(?!api\.)[-\w]+\.trycloudflare\.com")
     procs, holders = [], []
 
     for i in range(count):
@@ -80,13 +83,15 @@ def start_tunnels(port: int, count: int, timeout: float = 30.0):
              "--url", f"http://localhost:{port}"],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
         )
-        holder = {"url": ""}
+        holder = {"url": "", "err": ""}
 
         def reader(p=proc, h=holder):
             for line in p.stdout:
                 m = pat.search(line)
                 if m and not h["url"]:
                     h["url"] = m.group(0)
+                elif " ERR " in line or "failed" in line:
+                    h["err"] = line.strip()
 
         threading.Thread(target=reader, daemon=True).start()
         procs.append(proc)
@@ -100,6 +105,13 @@ def start_tunnels(port: int, count: int, timeout: float = 30.0):
     urls = [h["url"] for h in holders if h["url"]]
     if len(urls) < count:
         print(f"[tunnel] got {len(urls)}/{count} URLs (others timed out).")
+        errs = {h["err"] for h in holders if not h["url"] and h["err"]}
+        for e in errs:
+            print(f"[tunnel] cloudflared said: {e}")
+        if any("[::1]:53" in e for e in errs):
+            print("[tunnel] DNS lookup failed. On Termux, use Termux's own build:\n"
+                  "           pkg install cloudflared\n"
+                  "         and delete the downloaded 'cloudflared' file next to main.py.")
     return procs, urls
 
 

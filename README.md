@@ -50,6 +50,8 @@ python run.py
 
 PyPI has no prebuilt wheels for Android, so `run.py` detects Termux and installs a pure-Python set instead of `requirements.txt`: `starlette`, `uvicorn`, `qrcode`, `pypng`, `python-multipart`. Nothing needs compiling (no Rust, no C compiler), so it installs in about a minute on any Python version. QR PNGs are written with `pypng` instead of Pillow.
 
+`cloudflared` also comes from Termux's own repo (`run.py` runs `pkg install cloudflared` for you) rather than the generic Linux download, which can't look up DNS on Android and fails with `lookup api.trycloudflare.com on [::1]:53 … connection refused`.
+
 ### Offline rooms
 
 Pre-download wheels on a machine with internet, then ship the `vendor/` folder:

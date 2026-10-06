@@ -184,7 +184,30 @@ def have_cloudflared() -> bool:
     )
 
 
+def _termux_cloudflared():
+    """
+    Termux: use the `cloudflared` package from Termux's own repo. The generic
+    linux-arm64 release looks up DNS via [::1]:53 on Android (there is no
+    /etc/resolv.conf), so Quick Tunnels fail with "failed to request quick
+    Tunnel". Termux's build reads $PREFIX/etc/resolv.conf instead.
+    """
+    from shutil import which
+    if which("cloudflared"):
+        return
+    print("[setup] installing cloudflared from the Termux repo (pkg install cloudflared) …")
+    try:
+        subprocess.check_call(["pkg", "install", "-y", "cloudflared"])
+        print("[setup] cloudflared ready.")
+    except Exception as e:
+        print(f"[setup] pkg install cloudflared failed: {e}")
+        print("        Run it yourself:  pkg install cloudflared")
+        print("        The server still runs LAN-only until then.")
+
+
 def ensure_cloudflared():
+    if is_termux():
+        _termux_cloudflared()
+        return
     if have_cloudflared():
         return
     url, outname, kind = cloudflared_target()
