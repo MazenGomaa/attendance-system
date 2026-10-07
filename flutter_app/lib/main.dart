@@ -179,10 +179,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         appBar: AppBar(
           title: Text('${st['course']}', overflow: TextOverflow.ellipsis),
           actions: [
+            IconButton(
+              tooltip: 'Open admin page in browser',
+              icon: const Icon(Icons.open_in_browser),
+              onPressed: _openAdmin,
+            ),
             PopupMenuButton<String>(
               tooltip: 'Session actions',
               onSelected: _sessionAction,
               itemBuilder: (_) => [
+                const PopupMenuItem(value: 'admin', child: Text('Open admin page in browser')),
                 const PopupMenuItem(value: 'export', child: Text('Export & share CSVs now')),
                 const PopupMenuItem(value: 'reset', child: Text('Reset for a new take')),
                 const PopupMenuItem(value: 'subject', child: Text('New subject…')),
@@ -295,11 +301,25 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           final exported = await c.newSubject(name.text);
           _toast('Saved $exported');
         }
+      case 'admin':
+        await _openAdmin();
       case 'hall':
         await _pinHall();
       case 'unhall':
         c.setHall(null);
         _toast("Hall unpinned: using the students' median again");
+    }
+  }
+
+  /// The web dashboard in the phone's browser. "localhost" (not 127.0.0.1) so
+  /// the browser treats it as secure and allows location for "Pin hall".
+  Future<void> _openAdmin() async {
+    final port = c.server?.port ?? 0;
+    if (port == 0) return;
+    try {
+      await HostPlatform.openUrl('http://localhost:$port/admin');
+    } catch (e) {
+      _toast('Could not open the browser: $e');
     }
   }
 
