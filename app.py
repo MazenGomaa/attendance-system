@@ -33,7 +33,7 @@ from starlette.staticfiles import StaticFiles
 
 from state import config, store, admin_lock
 
-ID_RE = re.compile(r"^\d{1,20}$")
+ID_RE = re.compile(r"^[0-9]{1,20}$")   # ASCII only; normalize_digits() runs first
 ARABIC_WORD_RE = re.compile(r"^[؀-ۿ]+$")
 MIN_NAME_PARTS = 4
 COOKIE_NAME = "att_token"
@@ -42,6 +42,27 @@ DEVICE_RE = re.compile(r"^[A-Za-z0-9-]{8,64}$")
 HERE = os.path.dirname(os.path.abspath(__file__))
 EXPORT_DIR = os.path.join(HERE, "exports")
 os.makedirs(EXPORT_DIR, exist_ok=True)
+
+
+# Arabic-Indic (٠-٩) and Persian (۰-۹) digits -> ASCII, so IDs typed on an
+# Arabic keyboard validate and match the roster.
+_DIGITS = {**{0x0660 + i: str(i) for i in range(10)}, **{0x06F0 + i: str(i) for i in range(10)}}
+
+
+def normalize_digits(s: str) -> str:
+    return s.translate(_DIGITS)
+
+
+def parse_roster(text: str) -> set:
+    """Roster IDs from CSV/TXT text: first column of each line, digits only
+    (Arabic-Indic digits normalised), leading zeros dropped. Header and blank
+    lines are skipped because they aren't numeric."""
+    ids = set()
+    for line in text.lstrip("\ufeff").splitlines():
+        tok = normalize_digits(line.strip().split(",")[0].strip())
+        if tok and ID_RE.match(tok):
+            ids.add(tok.lstrip("0") or "0")
+    return ids
 
 
 def valid_id(s: str) -> bool:
@@ -584,7 +605,7 @@ async def submit(request: Request):
     except Exception:
         return reject("Bad request payload", 400)
 
-    sid = str(data.get("id", "")).strip()
+    sid = normalize_digits(str(data.get("id", "")).strip())
     raw_name = str(data.get("name", "")).strip()
     device_id = str(data.get("deviceId", "")).strip()
     if not DEVICE_RE.match(device_id):
