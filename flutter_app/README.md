@@ -26,8 +26,8 @@ move signing to CI secrets before distributing more widely.
 |---|---|---|
 | 0 | Foreground service + wake locks, bundled cloudflared, test server, self health checks, Debug screen | done |
 | 1 | Port the attendance server to Dart (parity with the Python scenario tests), save to disk as it goes | done |
-| 2 | Native dashboard (Overview / Students / Log tabs, export & share, reset for a new take, new subject), class-list import, remembered settings | done, testing on phone |
-| 3 | Crash recovery, tunnel auto-restart, battery-optimisation guidance | |
+| 2 | Native dashboard (Overview / Students / Log tabs, export & share, reset for a new take, new subject), class-list import, remembered settings | done |
+| 3 | Link-changed alerts, restarting unreachable tunnels, background-settings guide per phone brand, pre-class check, resume warning | done, testing on phone |
 | 4 | Real classroom test | |
 
 ## Server
@@ -55,6 +55,30 @@ session from the journal) or **End it & save CSVs**.
   Export & share now, Reset for a new take, and New subject (saves the
   current one to `Download/Attendance` and starts the next with the same
   links).
+
+## Reliability
+
+- **Tunnel links change when a tunnel restarts** (Quick Tunnels get a new
+  random hostname each time). `TunnelManager` remembers the link the
+  professor shared; if a restart produces a different one it raises a
+  heads-up notification and a red in-app banner ("Share new QR" / "Done,
+  I've shared it") until acknowledged. A resumed session always shows it.
+- Tunnels are health-checked every 30 s. The app follows cloudflared's own
+  connection state ("Registered" / "Connection terminated"). During a network
+  outage it waits (offline: a restart can't help); once the phone is back
+  online cloudflared gets 30 s to reconnect by itself, which keeps the same
+  link, before it's killed and restarted (new link + alert). A connected
+  tunnel whose public link fails 3 checks in a row is restarted too.
+  Restarts never give up while a session runs (5 quick retries, then one a
+  minute). Fresh-link checks resolve via Cloudflare DNS-over-HTTPS, and a
+  phone-side DNS failure never counts toward a restart.
+- **Background settings** (setup screen): battery-optimisation and
+  notification status, plus brand-specific steps (Samsung, Xiaomi, OPPO /
+  realme / OnePlus, vivo, Huawei / Honor) with a button that opens the
+  maker's own screen, falling back to the app info page.
+- **Pre-class check** (setup screen): checks cloudflared, battery and
+  notifications, then opens a throwaway tunnel, loads the student page
+  through it and records a test submission, and discards everything.
 
 ## How the app stays alive
 

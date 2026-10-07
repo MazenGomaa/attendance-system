@@ -86,6 +86,14 @@ void main() {
     expect(prefs['tunnels'], 1);
     expect(prefs.containsKey('password'), isFalse);
 
+    // After a resume the links are new: a red banner until acknowledged.
+    state.c.resumedLinksPending = true;
+    await tester.pump(const Duration(seconds: 3));
+    expect(find.textContaining('Session resumed with NEW student links'), findsOneWidget);
+    await tester.tap(find.text("Done, I've shared it"));
+    await tester.pump();
+    expect(find.textContaining('Session resumed with NEW student links'), findsNothing);
+
     // A student submits (straight into the server: flutter_test blocks real HTTP).
     final srv = state.c.server;
     srv.store.addRecord({'rid': 'r1', 'name': 'محمد احمد علي حسن', 'id': '1001',

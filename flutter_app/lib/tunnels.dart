@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 
 import 'debug_log.dart';
+import 'net_probe.dart';
 
 /// Matches the public Quick Tunnel URL in cloudflared's output. Skips
 /// api.trycloudflare.com: that's the endpoint cloudflared calls to *request* a
@@ -56,19 +57,69 @@ class Tunnel {
   int? lastLatencyMs;
   DateTime? lastCheck;
   Process? process;
+  /// The link the professor has shared (first URL, or the last acknowledged
+  /// one). A Quick Tunnel gets a brand-new URL every time it restarts.
+  String? sharedUrl;
+  /// True when [url] differs from [sharedUrl]: students holding the old QR
+  /// can't reach the session until the new one is shared.
+  bool get linkChanged => url != null && sharedUrl != null && url != sharedUrl;
+  int failStreak = 0;
+  int okStreak = 0;
+  DateTime? upSince;
+  /// cloudflared's own view: connected to Cloudflare's edge ("Registered
+  /// tunnel connection") or not ("Connection terminated" / "Unregistered").
+  /// While disconnected it keeps retrying on its own and, if it gets back in,
+  /// keeps the SAME link, which is the best outcome for students.
+  bool connected = false;
+  DateTime? disconnectedSince;
+  /// When the phone was last seen offline (no point restarting then).
+  DateTime? lastOffline;
 }
 
 /// Runs 1–4 cloudflared Quick Tunnels pointing at the local server, restarts
 /// any that exit, and health-checks each public URL once a minute by fetching
 /// it from the phone itself (through Cloudflare and back).
 class TunnelManager extends ChangeNotifier {
-  TunnelManager({required this.binary, required this.homeDir, required this.localPort});
+  TunnelManager({
+    required this.binary,
+    required this.homeDir,
+    required this.localPort,
+    this.checkEvery = const Duration(seconds: 30),
+    this.quickRetryDelay = const Duration(seconds: 5),
+    this.slowRetryDelay = const Duration(seconds: 60),
+    this.probe,
+    this.onLinkChanged,
+    this.graceAfterUp = const Duration(seconds: 90),
+    this.reconnectWindow = const Duration(seconds: 30),
+    this.isOnline,
+  });
 
   final String binary;
   final String homeDir;
   final int localPort;
-  static const int maxRestarts = 5;
-  static const Duration checkEvery = Duration(seconds: 60);
+  final Duration checkEvery;
+  final Duration quickRetryDelay;
+  final Duration slowRetryDelay;
+  /// Overrides the public-URL health probe (tests). Returns true if reachable.
+  final Future<bool> Function(String url)? probe;
+  /// Called when a restarted tunnel comes back with a different link.
+  final void Function(Tunnel t)? onLinkChanged;
+  /// A fresh link may not be reachable yet: failed checks in this window
+  /// after it appears are logged but never trigger a restart.
+  final Duration graceAfterUp;
+  /// Once the phone is back online, how long cloudflared gets to reconnect by
+  /// itself (keeping the link) before it's restarted (new link + alert).
+  final Duration reconnectWindow;
+  /// Overrides the "does this phone have internet" check (tests).
+  final Future<bool> Function()? isOnline;
+  /// Quick retries before slowing down; a tunnel is never given up on while
+  /// the session runs (giving up mid-lecture helps nobody).
+  static const int quickRestarts = 5;
+  /// Consecutive failed health checks before a live-but-unreachable tunnel
+  /// is restarted.
+  static const int failLimit = 3;
+  /// Consecutive good checks that earn back the quick-retry budget.
+  static const int healthyResetAfter = 10;
 
   final List<Tunnel> tunnels = [];
   Timer? _checkTimer;
@@ -98,6 +149,8 @@ class TunnelManager extends ChangeNotifier {
       // http2 over TCP/443: many campus/mobile networks block QUIC's UDP 7844.
       '--protocol', 'http2',
       '--url', 'http://127.0.0.1:$localPort',
+      // Stop within a second (default waits up to 30 s for open requests).
+      '--grace-period', '1s',
     ];
     log('tunnel${t.index}', 'starting: $binary ${args.join(' ')}');
     try {
@@ -108,11 +161,35 @@ class TunnelManager extends ChangeNotifier {
         // Everything goes to the session log file; the screen gets the gist.
         logToFileOnly('cf${t.index}', line);
         if (isInterestingCfLine(line)) log('cf${t.index}', line);
+        if (line.contains('Registered tunnel connection')) {
+          if (!t.connected && t.disconnectedSince != null && t.url != null &&
+              DateTime.now().difference(t.disconnectedSince!) > const Duration(seconds: 5)) {
+            log('tunnel${t.index}', 'reconnected by itself — same link, nothing to re-share');
+          }
+          t.connected = true;
+          t.disconnectedSince = null;
+          notifyListeners();
+        } else if (line.contains('Connection terminated') ||
+            line.contains('Unregistered tunnel connection')) {
+          if (t.connected) t.disconnectedSince = DateTime.now();
+          t.connected = false;
+          notifyListeners();
+        }
         final url = parseTunnelUrl(line);
         if (url != null && t.url == null) {
           t.url = url;
           t.state = TunnelState.up;
+          t.failStreak = 0;
+          t.upSince = DateTime.now();
+          t.connected = false;
+          t.disconnectedSince = DateTime.now();
+          t.sharedUrl ??= url;
           log('tunnel${t.index}', 'URL: $url');
+          if (t.linkChanged) {
+            log('tunnel${t.index}', 'WARNING: link changed from ${t.sharedUrl} to $url — '
+                'students need the new QR');
+            onLinkChanged?.call(t);
+          }
           notifyListeners();
         } else if ((line.contains(' ERR ') || line.contains('failed')) &&
             !isHarmlessCfLine(line)) {
@@ -137,50 +214,149 @@ class TunnelManager extends ChangeNotifier {
     t.process = null;
     if (!_running) {
       t.state = TunnelState.stopped;
-    } else if (t.restarts < maxRestarts) {
+    } else {
       t.restarts++;
       t.state = TunnelState.restarting;
-      log('tunnel${t.index}', 'restarting in 5 s (attempt ${t.restarts}/$maxRestarts)');
-      Timer(const Duration(seconds: 5), () {
-        if (_running) _launch(t);
+      final delay = t.restarts <= quickRestarts ? quickRetryDelay : slowRetryDelay;
+      log('tunnel${t.index}', 'restarting in ${delay.inSeconds} s (attempt ${t.restarts})');
+      Timer(delay, () {
+        if (_running && t.process == null) _launch(t);
       });
-    } else {
-      t.state = TunnelState.failed;
-      log('tunnel${t.index}', 'giving up after $maxRestarts restarts');
     }
     notifyListeners();
   }
 
-  /// Fetch each tunnel's /ping from the phone itself. Proves the public URL
-  /// works end to end without needing a second device.
+  /// Kill (not politely stop) so the replacement starts right away.
+  void _forceRestart(Tunnel t) {
+    t.failStreak = 0;
+    t.connected = false;
+    t.process?.kill(ProcessSignal.sigkill);   // exit -> _onExit -> restart
+  }
+
+  Future<bool> _defaultIsOnline() async {
+    // Any of these answering means the phone has internet. (Some campus
+    // networks block 1.1.1.1, hence the second one.)
+    for (final (host, port) in const [('1.1.1.1', 443), ('api.trycloudflare.com', 443)]) {
+      try {
+        final s = await Socket.connect(host, port, timeout: const Duration(seconds: 3));
+        s.destroy();
+        return true;
+      } catch (_) {}
+    }
+    return false;
+  }
+
+  /// The professor has shared the current link: stop warning about it.
+  void acknowledgeLink(Tunnel t) {
+    t.sharedUrl = t.url;
+    notifyListeners();
+  }
+
+  void acknowledgeAll() {
+    for (final t in tunnels) {
+      if (t.url != null) t.sharedUrl = t.url;
+    }
+    notifyListeners();
+  }
+
+  bool get anyLinkChanged => tunnels.any((t) => t.linkChanged);
+
+  Future<bool> _defaultProbe(String url) async {
+    // Resolves via Cloudflare DoH, not the phone's (possibly poisoned) cache.
+    final client = tunnelHttpClient();
+    try {
+      // /favicon.ico answers 204 with no body: the cheapest end-to-end probe.
+      final req = await client.getUrl(Uri.parse('$url/favicon.ico'));
+      final res = await req.close().timeout(const Duration(seconds: 20));
+      await res.drain<void>();
+      return res.statusCode == 204 || res.statusCode == 200;
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  /// Fetch each tunnel's public URL from the phone itself (through Cloudflare
+  /// and back). A tunnel whose process is alive but unreachable for
+  /// [failLimit] checks in a row is restarted.
   Future<void> checkAll() async {
     for (final t in tunnels) {
       final url = t.url;
-      if (url == null) continue;
+      if (url == null || t.state != TunnelState.up) continue;
+      if (!t.connected) {
+        await _checkDisconnected(t);
+        continue;
+      }
       final sw = Stopwatch()..start();
-      final client = HttpClient()..connectionTimeout = const Duration(seconds: 15);
+      bool ok;
+      String? why;
       try {
-        // /favicon.ico answers 204 with no body: the cheapest end-to-end probe.
-        final req = await client.getUrl(Uri.parse('$url/favicon.ico'));
-        final res = await req.close().timeout(const Duration(seconds: 20));
-        await res.drain<void>();
-        if (res.statusCode == 204 || res.statusCode == 200) {
-          t.checksOk++;
-          t.lastLatencyMs = sw.elapsedMilliseconds;
-          log('check${t.index}', 'OK ${res.statusCode} in ${sw.elapsedMilliseconds} ms');
-        } else {
-          t.checksFailed++;
-          log('check${t.index}', 'FAILED: HTTP ${res.statusCode}');
-        }
+        ok = await (probe ?? _defaultProbe)(url);
       } catch (e) {
+        ok = false;
+        why = '$e';
+      }
+      t.lastCheck = DateTime.now();
+      if (ok) {
+        t.checksOk++;
+        t.failStreak = 0;
+        t.okStreak++;
+        t.lastLatencyMs = sw.elapsedMilliseconds;
+        if (t.okStreak >= healthyResetAfter && t.restarts > 0) {
+          t.restarts = 0;   // healthy for a while: earn back quick retries
+        }
+        logToFileOnly('check${t.index}', 'OK in ${sw.elapsedMilliseconds} ms');
+      } else if (why != null && why.contains('Failed host lookup')) {
+        // Only this phone can't resolve its own link (e.g. a cached "no such
+        // host" from looking too early, with 1.1.1.1 blocked on this network).
+        // Students use other resolvers, so this says nothing about the
+        // tunnel: don't count it toward a restart.
         t.checksFailed++;
-        log('check${t.index}', 'FAILED: $e');
-      } finally {
-        client.close(force: true);
-        t.lastCheck = DateTime.now();
+        t.okStreak = 0;
+        log('check${t.index}', "phone can't look up its own link yet (DNS); not restarting");
+      } else {
+        t.checksFailed++;
+        t.okStreak = 0;
+        t.failStreak++;
+        log('check${t.index}', 'FAILED (${t.failStreak} in a row)${why == null ? '' : ': $why'}');
+        final young = t.upSince != null &&
+            DateTime.now().difference(t.upSince!) < graceAfterUp;
+        if (t.failStreak >= failLimit && t.process != null && !young) {
+          log('tunnel${t.index}', 'unreachable for $failLimit checks — restarting it');
+          t.failStreak = 0;
+          t.lastError = 'restarted: public link unreachable';
+          _forceRestart(t);
+        }
       }
     }
     notifyListeners();
+  }
+
+  /// cloudflared has lost Cloudflare's edge. Offline: wait (a restart can't
+  /// help). Online again: give it [reconnectWindow] to get back in with the
+  /// same link, then restart (new link, alert).
+  Future<void> _checkDisconnected(Tunnel t) async {
+    final now = DateTime.now();
+    final online = await (isOnline ?? _defaultIsOnline)();
+    if (!online) {
+      t.lastOffline = now;
+      log('check${t.index}', 'phone is offline — waiting for the network, tunnel keeps retrying');
+      return;
+    }
+    // Online for how long, and disconnected for how long?
+    final since = [t.disconnectedSince, t.lastOffline]
+        .whereType<DateTime>()
+        .fold<DateTime>(DateTime.fromMillisecondsSinceEpoch(0),
+            (a, b) => b.isAfter(a) ? b : a);
+    final waited = now.difference(since);
+    if (waited < reconnectWindow) {
+      log('check${t.index}', 'tunnel reconnecting by itself (same link) — '
+          'giving it ${(reconnectWindow - waited).inSeconds} s more');
+      return;
+    }
+    log('tunnel${t.index}', 'still disconnected ${waited.inSeconds} s after the network '
+        'came back — restarting it (students will need the new QR)');
+    t.lastError = 'restarted: could not reconnect';
+    _forceRestart(t);
   }
 
   Future<void> stop() async {

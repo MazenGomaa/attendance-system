@@ -67,6 +67,20 @@ class HostController extends ChangeNotifier {
   DateTime? _lastBeat;
   Map<String, String>? _paths;
   bool _ending = false;
+  /// Set when a session is resumed: its tunnel links are all new, so the
+  /// QR codes students have are stale until the professor re-shares them.
+  bool resumedLinksPending = false;
+
+  bool get linksNeedSharing =>
+      resumedLinksPending || (tunnels?.anyLinkChanged ?? false);
+
+  /// The professor has shared the current links.
+  void acknowledgeLinks() {
+    resumedLinksPending = false;
+    tunnels?.acknowledgeAll();
+    notifyListeners();
+  }
+
   /// Roster in force for the next session (empty: any numeric ID).
   Set<String> rosterIds = {};
   String? rosterName;
@@ -192,7 +206,7 @@ class HostController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<Map<String, StaticFile>> _loadStatics() async {
+  Future<Map<String, StaticFile>> loadStatics() async {
     const types = {'html': 'text/html; charset=utf-8', 'js': 'text/javascript; charset=utf-8'};
     final out = <String, StaticFile>{};
     for (final name in const ['index.html', 'index.js', 'admin.html', 'admin.js',
@@ -233,7 +247,7 @@ class HostController extends ChangeNotifier {
       final journal = resume?.journalPath ?? '${await _dir('sessions')}/$stamp.jsonl';
       final srv = AttendanceServer(
         config: cfg,
-        statics: await _loadStatics(),
+        statics: await loadStatics(),
         exportDir: await _dir('exports'),
         journalPath: journal,
         onEndSession: _afterEnd,
@@ -242,6 +256,7 @@ class HostController extends ChangeNotifier {
         srv.resumeFromJournal();
         cfg.ended = false;
         log('app', 'resumed "${cfg.courseName}": ${srv.store.records.length} students');
+        resumedLinksPending = true;
       }
       await HostPlatform.startService('Starting…');
       // Loopback only: students arrive through cloudflared. (A plain-HTTP
@@ -253,7 +268,12 @@ class HostController extends ChangeNotifier {
       log('server', 'attendance server on 127.0.0.1:$kPort, '
           'journal $journal, roster ${cfg.roster.length} IDs');
 
-      final tm = TunnelManager(binary: binaryPath!, homeDir: p['filesDir']!, localPort: kPort);
+      final tm = TunnelManager(
+        binary: binaryPath!, homeDir: p['filesDir']!, localPort: kPort,
+        onLinkChanged: (t) => HostPlatform.alert('Student link changed',
+            'Tunnel ${t.index} restarted with a new link. Students with the old QR '
+            "can't submit: open the app and share the new QR."),
+      );
       tm.addListener(() {
         // Keep the server's view of public URLs current (single-origin redirect).
         cfg.tunnelUrls = [for (final t in tm.tunnels) if (t.url != null) t.url!];
@@ -365,6 +385,7 @@ class HostController extends ChangeNotifier {
     server = null;
     tunnels = null;
     runningSince = null;
+    resumedLinksPending = false;
     try {
       await HostPlatform.stopService();
     } catch (_) {}
