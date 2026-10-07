@@ -63,9 +63,15 @@ session from the journal) or **End it & save CSVs**.
   professor shared; if a restart produces a different one it raises a
   heads-up notification and a red in-app banner ("Share new QR" / "Done,
   I've shared it") until acknowledged. A resumed session always shows it.
-- Tunnels are health-checked every 30 s through the public link; one that is
-  alive but unreachable for 3 checks in a row is restarted. Restarts never
-  give up while a session runs (5 quick retries, then one a minute).
+- Tunnels are health-checked every 30 s. The app follows cloudflared's own
+  connection state ("Registered" / "Connection terminated"). During a network
+  outage it waits (offline: a restart can't help); once the phone is back
+  online cloudflared gets 30 s to reconnect by itself, which keeps the same
+  link, before it's killed and restarted (new link + alert). A connected
+  tunnel whose public link fails 3 checks in a row is restarted too.
+  Restarts never give up while a session runs (5 quick retries, then one a
+  minute). Fresh-link checks resolve via Cloudflare DNS-over-HTTPS, and a
+  phone-side DNS failure never counts toward a restart.
 - **Background settings** (setup screen): battery-optimisation and
   notification status, plus brand-specific steps (Samsung, Xiaomi, OPPO /
   realme / OnePlus, vivo, Huawei / Honor) with a button that opens the

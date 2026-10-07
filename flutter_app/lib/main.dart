@@ -621,6 +621,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   Widget _tunnelCard(Tunnel t) {
     final color = switch (t.state) {
+      TunnelState.up when !t.connected => Colors.amber,
       TunnelState.up => Colors.greenAccent,
       TunnelState.failed => Colors.redAccent,
       TunnelState.stopped => Colors.grey,
@@ -635,7 +636,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             Row(children: [
               Icon(Icons.circle, size: 12, color: color),
               const SizedBox(width: 8),
-              Text('Tunnel ${t.index}: ${t.state.name}',
+              Text('Tunnel ${t.index}: ${t.state == TunnelState.up && !t.connected
+                  ? 'reconnecting (same link)' : t.state.name}',
                   style: const TextStyle(fontWeight: FontWeight.bold)),
               const Spacer(),
               Text('checks ${t.checksOk}✓ ${t.checksFailed}✗'),
