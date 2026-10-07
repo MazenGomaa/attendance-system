@@ -24,6 +24,7 @@ echo "INF |  https://pre-check.trycloudflare.com  |"; sleep 30
       deviceInfo: () async => {'batteryOptimizationIgnored': true, 'notificationsGranted': false},
       // The "public" link is served by the local test server.
       rewriteUrl: (_) => 'http://127.0.0.1:8011',
+      firstTryDelay: Duration.zero,
     );
     await p.run();
     for (final s in p.steps) {

@@ -8,6 +8,7 @@ import 'package:share_plus/share_plus.dart';
 
 import 'background_guide.dart';
 import 'debug_log.dart';
+import 'net_probe.dart';
 import 'platform.dart';
 import 'preflight_page.dart';
 import 'qr_image.dart';
@@ -17,6 +18,7 @@ import 'tunnels.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  netProbeLog = (m) => log('dns', m);   // visible in Debug -> Copy all
   runApp(const HostApp());
 }
 

@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 
 import 'debug_log.dart';
+import 'net_probe.dart';
 
 /// Matches the public Quick Tunnel URL in cloudflared's output. Skips
 /// api.trycloudflare.com: that's the endpoint cloudflared calls to *request* a
@@ -64,6 +65,7 @@ class Tunnel {
   bool get linkChanged => url != null && sharedUrl != null && url != sharedUrl;
   int failStreak = 0;
   int okStreak = 0;
+  DateTime? upSince;
 }
 
 /// Runs 1–4 cloudflared Quick Tunnels pointing at the local server, restarts
@@ -79,6 +81,7 @@ class TunnelManager extends ChangeNotifier {
     this.slowRetryDelay = const Duration(seconds: 60),
     this.probe,
     this.onLinkChanged,
+    this.graceAfterUp = const Duration(seconds: 90),
   });
 
   final String binary;
@@ -91,6 +94,9 @@ class TunnelManager extends ChangeNotifier {
   final Future<bool> Function(String url)? probe;
   /// Called when a restarted tunnel comes back with a different link.
   final void Function(Tunnel t)? onLinkChanged;
+  /// A fresh link may not be reachable yet: failed checks in this window
+  /// after it appears are logged but never trigger a restart.
+  final Duration graceAfterUp;
   /// Quick retries before slowing down; a tunnel is never given up on while
   /// the session runs (giving up mid-lecture helps nobody).
   static const int quickRestarts = 5;
@@ -143,6 +149,7 @@ class TunnelManager extends ChangeNotifier {
           t.url = url;
           t.state = TunnelState.up;
           t.failStreak = 0;
+          t.upSince = DateTime.now();
           t.sharedUrl ??= url;
           log('tunnel${t.index}', 'URL: $url');
           if (t.linkChanged) {
@@ -202,7 +209,8 @@ class TunnelManager extends ChangeNotifier {
   bool get anyLinkChanged => tunnels.any((t) => t.linkChanged);
 
   Future<bool> _defaultProbe(String url) async {
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 15);
+    // Resolves via Cloudflare DoH, not the phone's (possibly poisoned) cache.
+    final client = tunnelHttpClient();
     try {
       // /favicon.ico answers 204 with no body: the cheapest end-to-end probe.
       final req = await client.getUrl(Uri.parse('$url/favicon.ico'));
@@ -240,12 +248,22 @@ class TunnelManager extends ChangeNotifier {
           t.restarts = 0;   // healthy for a while: earn back quick retries
         }
         logToFileOnly('check${t.index}', 'OK in ${sw.elapsedMilliseconds} ms');
+      } else if (why != null && why.contains('Failed host lookup')) {
+        // Only this phone can't resolve its own link (e.g. a cached "no such
+        // host" from looking too early, with 1.1.1.1 blocked on this network).
+        // Students use other resolvers, so this says nothing about the
+        // tunnel: don't count it toward a restart.
+        t.checksFailed++;
+        t.okStreak = 0;
+        log('check${t.index}', "phone can't look up its own link yet (DNS); not restarting");
       } else {
         t.checksFailed++;
         t.okStreak = 0;
         t.failStreak++;
         log('check${t.index}', 'FAILED (${t.failStreak} in a row)${why == null ? '' : ': $why'}');
-        if (t.failStreak >= failLimit && t.process != null) {
+        final young = t.upSince != null &&
+            DateTime.now().difference(t.upSince!) < graceAfterUp;
+        if (t.failStreak >= failLimit && t.process != null && !young) {
           log('tunnel${t.index}', 'unreachable for $failLimit checks — restarting it');
           t.failStreak = 0;
           t.lastError = 'restarted: public link unreachable';

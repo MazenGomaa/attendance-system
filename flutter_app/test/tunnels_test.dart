@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:attendance_host/net_probe.dart';
 import 'package:attendance_host/tunnels.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -70,6 +71,7 @@ echo "INF |  https://run-\$n.trycloudflare.com  |"; sleep 30
       quickRetryDelay: const Duration(milliseconds: 100),
       probe: (url) async => reachable,
       onLinkChanged: (t) => changed.add(t.url!),
+      graceAfterUp: Duration.zero,
     );
     await tm.start(1);
     await Future<void>.delayed(const Duration(milliseconds: 300));
@@ -90,6 +92,60 @@ echo "INF |  https://run-\$n.trycloudflare.com  |"; sleep 30
     expect(t.url, 'https://run-2.trycloudflare.com');
     expect(t.restarts, 1);
     expect(t.checksOk, greaterThan(0));
+    await tm.stop();
+    await dir.delete(recursive: true);
+  }, timeout: const Timeout(Duration(seconds: 30)));
+
+  test('no restarts for failed checks while a fresh link is in its grace period', () async {
+    final dir = await Directory.systemTemp.createTemp('cf');
+    final fake = File('${dir.path}/cloudflared');
+    await fake.writeAsString('''#!/bin/sh
+echo "INF |  https://fresh.trycloudflare.com  |"; sleep 30
+''');
+    await Process.run('chmod', ['+x', fake.path]);
+    final tm = TunnelManager(
+      binary: fake.path, homeDir: dir.path, localPort: 8000,
+      checkEvery: const Duration(milliseconds: 100),
+      probe: (url) async => false,   // DNS not live yet
+      graceAfterUp: const Duration(seconds: 30),
+    );
+    await tm.start(1);
+    await Future<void>.delayed(const Duration(milliseconds: 900));
+    final t = tm.tunnels.single;
+    expect(t.checksFailed, greaterThanOrEqualTo(3));
+    expect(t.restarts, 0);
+    expect(t.url, 'https://fresh.trycloudflare.com');
+    await tm.stop();
+    await dir.delete(recursive: true);
+  }, timeout: const Timeout(Duration(seconds: 30)));
+
+  test('parses DNS-over-HTTPS answers', () {
+    const body = '{"Status":0,"Answer":[{"name":"a.trycloudflare.com","type":5,"data":"x."},'
+        '{"name":"x.","type":1,"data":"104.16.230.132"},{"type":1,"data":"104.16.231.132"}]}';
+    expect(parseDohAnswer(body).map((a) => a.address), ['104.16.230.132', '104.16.231.132']);
+    expect(parseDohAnswer('{"Status":3}'), isEmpty);   // NXDOMAIN
+  });
+
+  test("a DNS failure on the phone itself never restarts the tunnel", () async {
+    final dir = await Directory.systemTemp.createTemp('cf');
+    final fake = File('${dir.path}/cloudflared');
+    await fake.writeAsString('''#!/bin/sh
+echo "INF |  https://dns-cached.trycloudflare.com  |"; sleep 30
+''');
+    await Process.run('chmod', ['+x', fake.path]);
+    final tm = TunnelManager(
+      binary: fake.path, homeDir: dir.path, localPort: 8000,
+      checkEvery: const Duration(milliseconds: 100),
+      graceAfterUp: Duration.zero,
+      probe: (url) async => throw const SocketException(
+          "Failed host lookup: 'dns-cached.trycloudflare.com'"),
+    );
+    await tm.start(1);
+    await Future<void>.delayed(const Duration(milliseconds: 900));
+    final t = tm.tunnels.single;
+    expect(t.checksFailed, greaterThanOrEqualTo(3));
+    expect(t.failStreak, 0);
+    expect(t.restarts, 0);
     await tm.stop();
     await dir.delete(recursive: true);
   }, timeout: const Timeout(Duration(seconds: 30)));

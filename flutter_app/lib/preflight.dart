@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 
 import 'debug_log.dart';
+import 'net_probe.dart';
 import 'server/logic.dart';
 import 'server/model.dart';
 import 'server/server.dart';
@@ -33,7 +34,8 @@ class Preflight extends ChangeNotifier {
     this.port = 8001,
     this.rewriteUrl,
     this.tunnelWait = const Duration(seconds: 45),
-    this.reachWait = const Duration(seconds: 60),
+    this.reachWait = const Duration(seconds: 90),
+    this.firstTryDelay = const Duration(seconds: 8),
   });
 
   final String binary;
@@ -45,6 +47,8 @@ class Preflight extends ChangeNotifier {
   final String Function(String url)? rewriteUrl;
   final Duration tunnelWait;
   final Duration reachWait;
+  /// A new link isn't live the instant cloudflared prints it.
+  final Duration firstTryDelay;
 
   late final PreflightStep cloudflared = PreflightStep('cloudflared runs on this phone');
   late final PreflightStep battery = PreflightStep('Battery optimisation off');
@@ -130,7 +134,10 @@ class Preflight extends ChangeNotifier {
       // seconds before they resolve, so retry for a while).
       final base = rewriteUrl?.call(t.url!) ?? t.url!;
       _set(page, StepStatus.running, 'waiting for the link to go live…');
-      final client = HttpClient()..connectionTimeout = const Duration(seconds: 10);
+      await Future<void>.delayed(firstTryDelay);
+      // Resolves the new hostname via Cloudflare DoH, so an early lookup
+      // cached as "no such host" on this phone can't fail the check.
+      final client = tunnelHttpClient();
       try {
         final reach = Stopwatch()..start();
         String? err;
