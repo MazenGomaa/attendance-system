@@ -285,6 +285,13 @@ def main():
     else:
         img = save_qr(local_url, "Student URL (LAN)")
         open_file(img)
+        if config.geofence:
+            # Browsers only allow location on HTTPS pages (or localhost), so on
+            # this plain-HTTP link students can never pass the location check.
+            print("\n[warning] No tunnel is up, so students only have the local http:// link.\n"
+                  "          Browsers block location on http:// pages, so with location\n"
+                  "          required NOBODY will be able to submit. Fix the tunnel, or\n"
+                  "          restart and answer 'N' to the location question.")
 
     server = uvicorn.Server(uvicorn.Config(app, host="0.0.0.0", port=PORT, workers=1,
                                            log_level="warning"))

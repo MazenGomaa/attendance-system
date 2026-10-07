@@ -92,7 +92,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       ..radiusKm = double.tryParse(_radius.text.trim()) ?? 0.5
       ..password = _password.text;
     if (settings.radiusKm < 0.05) settings.radiusKm = 0.05;
-    if (settings.tunnels == 0 && !settings.localNetwork) settings.tunnels = 1;
     c.start(settings, resume: resume);
   }
 
@@ -247,7 +246,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final withUrl = c.tunnels?.tunnels.where((t) => t.url != null).toList() ?? const <Tunnel>[];
     final links = [
       for (final t in withUrl) (t.url!, 'Tunnel ${t.index}'),
-      for (final (i, u) in c.lanUrls.indexed) (u, 'Local network ${i + 1}'),
     ];
     return Row(children: [
       if (links.isNotEmpty) ...[
@@ -353,33 +351,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         decoration: const InputDecoration(labelText: 'Web dashboard password (optional)',
             helperText: 'Only for opening the dashboard in a browser; this app needs none'),
       ),
-      const SizedBox(height: 8),
-      SwitchListTile(
-        contentPadding: EdgeInsets.zero,
-        title: const Text('Also serve on this phone\'s Wi-Fi / hotspot'),
-        subtitle: const Text('Students on the same network can use a local link. '
-            'With 0 tunnels this works without internet.'),
-        value: settings.localNetwork,
-        onChanged: (v) => setState(() {
-          settings.localNetwork = v;
-          if (!v && settings.tunnels == 0) settings.tunnels = 1;
-        }),
-      ),
-      if (settings.localNetwork)
-        SwitchListTile(
-          contentPadding: EdgeInsets.zero,
-          title: const Text('Allow the web dashboard from the same network'),
-          subtitle: const Text('Lets e.g. a laptop on this Wi-Fi open /admin. '
-              'Set a password if others share the network.'),
-          value: settings.lanDashboard,
-          onChanged: (v) => setState(() => settings.lanDashboard = v),
-        ),
       const SizedBox(height: 16),
       const Text('Tunnels (each handles ~200 students at once)'),
       const SizedBox(height: 8),
       SegmentedButton<int>(
         segments: [
-          for (var i = settings.localNetwork ? 0 : 1; i <= 4; i++)
+          for (var i = 1; i <= 4; i++)
             ButtonSegment(value: i, label: Text('$i')),
         ],
         selected: {settings.tunnels},
@@ -442,15 +419,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       ]),
       const SizedBox(height: 8),
       for (final t in c.tunnels?.tunnels ?? const <Tunnel>[]) _tunnelCard(t),
-      for (final (i, u) in c.lanUrls.indexed) _linkCard(u, 'Local network ${i + 1}',
-          'For phones on this Wi-Fi / hotspot'),
-      if (c.lanUrls.isEmpty && (c.tunnels?.tunnels.isEmpty ?? true))
-        const Card(child: ListTile(
-          leading: Icon(Icons.wifi_off, color: Colors.redAccent),
-          title: Text('No student link'),
-          subtitle: Text('No tunnels and no Wi-Fi/hotspot address. Turn on the hotspot '
-              'or Wi-Fi, then end and restart the session.'),
-        )),
     ];
   }
 
@@ -571,23 +539,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               builder: (_) => QrPage(url: url, title: title))),
         ),
       ]);
-
-  Widget _linkCard(String url, String title, String note) => Card(
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Row(children: [
-              const Icon(Icons.wifi, size: 16, color: Colors.greenAccent),
-              const SizedBox(width: 8),
-              Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
-            ]),
-            Text(note, style: const TextStyle(fontSize: 12, color: Colors.white70)),
-            const SizedBox(height: 6),
-            SelectableText(url, style: const TextStyle(color: Colors.lightBlueAccent)),
-            _linkButtons(url, title),
-          ]),
-        ),
-      );
 
   Widget _tunnelCard(Tunnel t) {
     final color = switch (t.state) {

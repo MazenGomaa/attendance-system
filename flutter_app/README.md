@@ -26,7 +26,7 @@ move signing to CI secrets before distributing more widely.
 |---|---|---|
 | 0 | Foreground service + wake locks, bundled cloudflared, test server, self health checks, Debug screen | done |
 | 1 | Port the attendance server to Dart (parity with the Python scenario tests), save to disk as it goes | done |
-| 2 | Native dashboard (Overview / Students / Log tabs, export & share, reset for a new take, new subject), class-list import, local-network (Wi-Fi/hotspot) mode, remembered settings | done, testing on phone |
+| 2 | Native dashboard (Overview / Students / Log tabs, export & share, reset for a new take, new subject), class-list import, remembered settings | done, testing on phone |
 | 3 | Crash recovery, tunnel auto-restart, battery-optimisation guidance | |
 | 4 | Real classroom test | |
 
@@ -46,12 +46,10 @@ session from the journal) or **End it & save CSVs**.
 
 - **Setup** (remembered between sessions, except the password): course name,
   location audit + radius, class list (CSV/TXT, IDs in the first column),
-  optional web-dashboard password, local-network mode, 0-4 tunnels.
-- **Local-network mode** listens on the phone's Wi-Fi/hotspot address too
-  (`http://<phone-ip>:8000`, shown with a QR). With 0 tunnels it works
-  without internet: turn on the hotspot and have students join it.
-  "Allow the web dashboard from the same network" lets a laptop on that
-  network open `/admin` (set a password on shared networks).
+  optional web-dashboard password, 1-4 tunnels.
+- Students always come in through the tunnels (HTTPS): browsers only allow
+  location on HTTPS pages, so a plain-HTTP local Wi-Fi/hotspot link can't
+  do the GPS audit (local-network mode was tried and removed).
 - **While running**: Overview (counts, links, QR), Students (searchable, with
   distance and flags), Log (edits and refused ID conflicts). The ⋮ menu has
   Export & share now, Reset for a new take, and New subject (saves the

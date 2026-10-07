@@ -21,54 +21,19 @@ class SessionSettings {
   double radiusKm = 0.5;
   String password = '';
   int tunnels = 2;
-  /// Also serve on the phone's Wi-Fi/hotspot address (students on the same
-  /// network, works without internet when tunnels are 0).
-  bool localNetwork = false;
-  /// Let a device on the same private network open the web dashboard.
-  bool lanDashboard = false;
 
   Map<String, Object?> toJson() => {
         'course': course, 'geofence': geofence, 'radiusKm': radiusKm,
-        'tunnels': tunnels, 'localNetwork': localNetwork, 'lanDashboard': lanDashboard,
+        'tunnels': tunnels,
       };
 
   void applyJson(Map<String, Object?> j) {
     course = (j['course'] as String?) ?? course;
     geofence = (j['geofence'] as bool?) ?? geofence;
     radiusKm = (j['radiusKm'] as num?)?.toDouble() ?? radiusKm;
-    tunnels = (j['tunnels'] as int?) ?? tunnels;
-    localNetwork = (j['localNetwork'] as bool?) ?? localNetwork;
-    lanDashboard = (j['lanDashboard'] as bool?) ?? lanDashboard;
+    tunnels = ((j['tunnels'] as int?) ?? tunnels).clamp(1, 4);
   }
 }
-
-/// Private IPv4 addresses of this phone (Wi-Fi, hotspot, Tailscale).
-Future<List<String>> localIPv4s() async {
-  final out = <String>[];
-  try {
-    for (final ni in await NetworkInterface.list(type: InternetAddressType.IPv4)) {
-      for (final a in ni.addresses) {
-        final b = a.rawAddress;
-        final private = b[0] == 10 ||
-            (b[0] == 172 && b[1] >= 16 && b[1] <= 31) ||
-            (b[0] == 192 && b[1] == 168) ||
-            (b[0] == 100 && b[1] >= 64 && b[1] <= 127);
-        if (private && !a.isLoopback) out.add(a.address);
-      }
-    }
-  } catch (e) {
-    log('app', 'could not list network interfaces: $e');
-  }
-  return out;
-}
-
-/// The /24 (or the whole tailnet) around each address, for the web dashboard.
-List<String> adminCidrsFor(List<String> ips) => {
-      for (final ip in ips)
-        ip.startsWith('100.') && int.parse(ip.split('.')[1]) >= 64
-            ? '100.64.0.0/10'
-            : '${ip.split('.').take(3).join('.')}.0/24',
-    }.toList();
 
 /// An unfinished session found on disk (the app was killed mid-session).
 class UnfinishedSession {
@@ -105,8 +70,6 @@ class HostController extends ChangeNotifier {
   /// Roster in force for the next session (empty: any numeric ID).
   Set<String> rosterIds = {};
   String? rosterName;
-  /// `http://phone-ip:8000` links when local-network mode is on.
-  List<String> lanUrls = [];
 
   bool get running => server != null;
 
@@ -256,17 +219,13 @@ class HostController extends ChangeNotifier {
           '(${bin.existsSync() ? '${bin.lengthSync()} bytes' : 'MISSING'})');
 
       await saveSettings(s);
-      final ips = s.localNetwork ? await localIPv4s() : const <String>[];
       final cfg = ServerConfig()
         ..courseName = s.course.trim().isEmpty ? 'Session' : s.course.trim()
         ..pageSecret = randomHex()
         ..geofence = s.geofence
         ..auditRadiusKm = s.radiusKm
         ..roster = {...rosterIds}
-        // Redirecting everyone to the one tunnel would break students who
-        // came in over the local network, so only do it without LAN mode.
-        ..forceSingleOrigin = s.tunnels <= 1 && !s.localNetwork
-        ..adminCidrs = s.localNetwork && s.lanDashboard ? adminCidrsFor(ips) : [];
+        ..forceSingleOrigin = s.tunnels <= 1;
       if (s.password.isNotEmpty) {
         cfg.adminPwSalt = randomHex(8);
         cfg.adminPwHash = sha256Hex(cfg.adminPwSalt + s.password);
@@ -285,19 +244,14 @@ class HostController extends ChangeNotifier {
         log('app', 'resumed "${cfg.courseName}": ${srv.store.records.length} students');
       }
       await HostPlatform.startService('Starting…');
-      // Loopback is enough for cloudflared; LAN mode listens on every
-      // interface so phones on the same Wi-Fi/hotspot can connect directly.
-      await srv.start(address: s.localNetwork ? '0.0.0.0' : '127.0.0.1', port: kPort);
+      // Loopback only: students arrive through cloudflared. (A plain-HTTP
+      // local link can't work: browsers allow location only on HTTPS pages.)
+      await srv.start(address: '127.0.0.1', port: kPort);
       server = srv;
       unfinished = null;
       runningSince = DateTime.now();
-      lanUrls = [for (final ip in ips) 'http://$ip:$kPort'];
-      log('server', 'attendance server on ${s.localNetwork ? '0.0.0.0' : '127.0.0.1'}:$kPort, '
-          'journal $journal, roster ${cfg.roster.length} IDs'
-          '${lanUrls.isEmpty ? '' : ', local links ${lanUrls.join(' ')}'}');
-      if (s.localNetwork && ips.isEmpty) {
-        log('app', 'local-network mode is on but this phone has no Wi-Fi/hotspot address');
-      }
+      log('server', 'attendance server on 127.0.0.1:$kPort, '
+          'journal $journal, roster ${cfg.roster.length} IDs');
 
       final tm = TunnelManager(binary: binaryPath!, homeDir: p['filesDir']!, localPort: kPort);
       tm.addListener(() {
@@ -307,7 +261,7 @@ class HostController extends ChangeNotifier {
         notifyListeners();
       });
       tunnels = tm;
-      if (s.tunnels > 0) await tm.start(s.tunnels);
+      await tm.start(s.tunnels);
       _startTimers();
       log('app', 'session started with ${s.tunnels} tunnel(s)');
     } catch (e, st) {
@@ -411,7 +365,6 @@ class HostController extends ChangeNotifier {
     server = null;
     tunnels = null;
     runningSince = null;
-    lanUrls = [];
     try {
       await HostPlatform.stopService();
     } catch (_) {}

@@ -8,7 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// Drives the real app UI with the Android side faked: setup, roster import,
-/// start (local-network mode, no tunnels), live tabs, new subject, end.
+/// start, live tabs, new subject, end.
 /// Lets real I/O (server bind, files) and the test's fake clock both advance
 /// until [done] is true.
 Future<void> settleUntil(WidgetTester tester, bool Function() done) async {
@@ -67,11 +67,10 @@ void main() {
     final saved = jsonDecode(File('${files.path}/roster.json').readAsStringSync()) as Map;
     expect(saved['ids'], ['1001', '1002']);
 
-    // Local-network mode, 0 tunnels, a course name.
+    // A course name and 1 tunnel (no cloudflared binary here, so the tunnel
+    // just reports failed; the server and screens still run).
     await tester.enterText(find.widgetWithText(TextField, 'Course / subject name'), 'Physics 1');
-    await tester.tap(find.text('Also serve on this phone\'s Wi-Fi / hotspot'));
-    await tester.pump();
-    await tester.tap(find.text('0'));
+    await tester.tap(find.text('1'));
     await tester.pump();
 
     final state = tester.state(find.byType(HomePage)) as dynamic;
@@ -84,7 +83,7 @@ void main() {
     // Settings were remembered (no password stored).
     final prefs = jsonDecode(File('${files.path}/settings.json').readAsStringSync()) as Map;
     expect(prefs['course'], 'Physics 1');
-    expect(prefs['localNetwork'], true);
+    expect(prefs['tunnels'], 1);
     expect(prefs.containsKey('password'), isFalse);
 
     // A student submits (straight into the server: flutter_test blocks real HTTP).
