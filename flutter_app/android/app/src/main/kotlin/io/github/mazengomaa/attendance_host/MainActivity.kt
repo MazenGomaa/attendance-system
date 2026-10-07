@@ -1,6 +1,7 @@
 package io.github.mazengomaa.attendance_host
 
 import android.content.Context
+import android.content.Intent
 import android.os.Bundle
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -21,6 +22,15 @@ class MainActivity : FlutterActivity() {
         val app = application as AttendanceApp
         if (app.currentActivity === this) app.currentActivity = null
         super.onDestroy()
+    }
+
+    @Deprecated("Activity result API; fine for a single system picker call")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == AttendanceApp.PICK_REQUEST) {
+            (application as AttendanceApp).onPickResult(
+                if (resultCode == RESULT_OK) data?.data else null)
+        }
     }
 
     override fun provideFlutterEngine(context: Context): FlutterEngine? =

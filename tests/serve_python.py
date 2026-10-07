@@ -21,6 +21,7 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--port", type=int, default=8765)
 ap.add_argument("--no-password", action="store_true")
 ap.add_argument("--export-dir")
+ap.add_argument("--roster", help="roster CSV/TXT to enforce")
 args = ap.parse_args()
 
 import app as app_module  # noqa: E402
@@ -34,6 +35,9 @@ config.course_name = "Scenario"
 config.page_secret = secrets.token_hex(16)
 config.geofence = True
 config.audit_radius_km = 0.5
+if args.roster:
+    with open(args.roster, encoding="utf-8-sig") as f:
+        config.roster = app_module.parse_roster(f.read())
 if not args.no_password:
     config.admin_pw_salt = "salt"
     config.admin_pw_hash = hashlib.sha256(b"salt" + b"pw").hexdigest()

@@ -29,6 +29,22 @@ String normalizeDigits(String s) {
 
 bool validId(String s) => idRe.hasMatch(s);
 
+/// Roster IDs from CSV/TXT text: first column of each line, digits only
+/// (Arabic-Indic digits normalised), leading zeros dropped. Header and blank
+/// lines are skipped because they aren't numeric. Mirrors parse_roster().
+Set<String> parseRoster(String text) {
+  final ids = <String>{};
+  final body = text.startsWith('\uFEFF') ? text.substring(1) : text;
+  for (final line in const LineSplitter().convert(body)) {
+    final tok = normalizeDigits(line.trim().split(',').first.trim());
+    if (tok.isNotEmpty && validId(tok)) {
+      final stripped = tok.replaceFirst(RegExp(r'^0+'), '');
+      ids.add(stripped.isEmpty ? '0' : stripped);
+    }
+  }
+  return ids;
+}
+
 /// (ok, normalised name): 4+ Arabic words, single-spaced, at most 100 chars.
 (bool, String) validName(String s) {
   final parts = s.trim().split(RegExp(r'\s+')).where((p) => p.isNotEmpty).toList();

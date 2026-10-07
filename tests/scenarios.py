@@ -252,11 +252,28 @@ def run_nopassword_mode(base):
           Client(base, ip="41.1.1.1").get("/admin/state").status == 401)
 
 
+def run_roster_mode(base):
+    """Server started with --roster tests/roster_fixture.csv
+    (IDs 007123, 2001, ٣٠٠٣, 4004 plus a header and junk lines)."""
+    p = Client(base, "41.7.7.7")
+    r = p.submit("dev-roster01", "7123", NAMES["mohamed"])
+    check("roster: leading zeros ignored (007123 matches 7123)", r.json().get("mode") == "created", r.text)
+    r = Client(base, "41.7.7.8").submit("dev-roster02", "٢٠٠١", NAMES["sara"])
+    check("roster: Arabic-Indic ID typed by the student matches", r.json().get("mode") == "created", r.text)
+    r = Client(base, "41.7.7.9").submit("dev-roster03", "3003", NAMES["khaled"])
+    check("roster: Arabic-Indic ID in the roster file matches", r.json().get("mode") == "created", r.text)
+    r = Client(base, "41.7.7.10").submit("dev-roster04", "9999", NAMES["omar"])
+    check("roster: ID not on the list -> 403", r.status == 403 and "class list" in r.text, r.text)
+    r = Client(base, "41.7.7.11").submit("dev-roster05", "4004", NAMES["omar"])
+    check("roster: spaces around the ID in the file are ignored", r.json().get("mode") == "created", r.text)
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", default="http://127.0.0.1:8765")
-    ap.add_argument("--mode", choices=["password", "nopassword"], default="password")
+    ap.add_argument("--mode", choices=["password", "nopassword", "roster"], default="password")
     args = ap.parse_args()
-    (run_password_mode if args.mode == "password" else run_nopassword_mode)(args.base)
+    {"password": run_password_mode, "nopassword": run_nopassword_mode,
+     "roster": run_roster_mode}[args.mode](args.base)
     print(f"\nFAILURES: {failures}")
     sys.exit(1 if failures else 0)

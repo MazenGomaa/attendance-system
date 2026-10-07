@@ -53,6 +53,18 @@ def normalize_digits(s: str) -> str:
     return s.translate(_DIGITS)
 
 
+def parse_roster(text: str) -> set:
+    """Roster IDs from CSV/TXT text: first column of each line, digits only
+    (Arabic-Indic digits normalised), leading zeros dropped. Header and blank
+    lines are skipped because they aren't numeric."""
+    ids = set()
+    for line in text.lstrip("\ufeff").splitlines():
+        tok = normalize_digits(line.strip().split(",")[0].strip())
+        if tok and ID_RE.match(tok):
+            ids.add(tok.lstrip("0") or "0")
+    return ids
+
+
 def valid_id(s: str) -> bool:
     return bool(ID_RE.match(s))
 

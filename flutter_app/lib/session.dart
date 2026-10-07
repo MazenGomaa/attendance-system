@@ -14,13 +14,61 @@ import 'tunnels.dart';
 
 const int kPort = 8000;
 
+/// Setup choices, remembered between sessions (except the password).
 class SessionSettings {
   String course = '';
   bool geofence = true;
   double radiusKm = 0.5;
   String password = '';
   int tunnels = 2;
+  /// Also serve on the phone's Wi-Fi/hotspot address (students on the same
+  /// network, works without internet when tunnels are 0).
+  bool localNetwork = false;
+  /// Let a device on the same private network open the web dashboard.
+  bool lanDashboard = false;
+
+  Map<String, Object?> toJson() => {
+        'course': course, 'geofence': geofence, 'radiusKm': radiusKm,
+        'tunnels': tunnels, 'localNetwork': localNetwork, 'lanDashboard': lanDashboard,
+      };
+
+  void applyJson(Map<String, Object?> j) {
+    course = (j['course'] as String?) ?? course;
+    geofence = (j['geofence'] as bool?) ?? geofence;
+    radiusKm = (j['radiusKm'] as num?)?.toDouble() ?? radiusKm;
+    tunnels = (j['tunnels'] as int?) ?? tunnels;
+    localNetwork = (j['localNetwork'] as bool?) ?? localNetwork;
+    lanDashboard = (j['lanDashboard'] as bool?) ?? lanDashboard;
+  }
 }
+
+/// Private IPv4 addresses of this phone (Wi-Fi, hotspot, Tailscale).
+Future<List<String>> localIPv4s() async {
+  final out = <String>[];
+  try {
+    for (final ni in await NetworkInterface.list(type: InternetAddressType.IPv4)) {
+      for (final a in ni.addresses) {
+        final b = a.rawAddress;
+        final private = b[0] == 10 ||
+            (b[0] == 172 && b[1] >= 16 && b[1] <= 31) ||
+            (b[0] == 192 && b[1] == 168) ||
+            (b[0] == 100 && b[1] >= 64 && b[1] <= 127);
+        if (private && !a.isLoopback) out.add(a.address);
+      }
+    }
+  } catch (e) {
+    log('app', 'could not list network interfaces: $e');
+  }
+  return out;
+}
+
+/// The /24 (or the whole tailnet) around each address, for the web dashboard.
+List<String> adminCidrsFor(List<String> ips) => {
+      for (final ip in ips)
+        ip.startsWith('100.') && int.parse(ip.split('.')[1]) >= 64
+            ? '100.64.0.0/10'
+            : '${ip.split('.').take(3).join('.')}.0/24',
+    }.toList();
 
 /// An unfinished session found on disk (the app was killed mid-session).
 class UnfinishedSession {
@@ -54,6 +102,11 @@ class HostController extends ChangeNotifier {
   DateTime? _lastBeat;
   Map<String, String>? _paths;
   bool _ending = false;
+  /// Roster in force for the next session (empty: any numeric ID).
+  Set<String> rosterIds = {};
+  String? rosterName;
+  /// `http://phone-ip:8000` links when local-network mode is on.
+  List<String> lanUrls = [];
 
   bool get running => server != null;
 
@@ -70,6 +123,87 @@ class HostController extends ChangeNotifier {
       log('app', 'deviceInfo failed: $e');
     }
     notifyListeners();
+  }
+
+  // ---- remembered settings + roster ----
+
+  Future<File> _file(String name) async => File('${(await paths())['filesDir']}/$name');
+
+  Future<void> loadSettings(SessionSettings s) async {
+    try {
+      final f = await _file('settings.json');
+      if (f.existsSync()) s.applyJson((jsonDecode(f.readAsStringSync()) as Map).cast());
+      final r = await _file('roster.json');
+      if (r.existsSync()) {
+        final j = (jsonDecode(r.readAsStringSync()) as Map).cast<String, Object?>();
+        rosterName = j['name'] as String?;
+        rosterIds = {...(j['ids'] as List).cast<String>()};
+      }
+    } catch (e) {
+      log('app', 'could not load saved settings: $e');
+    }
+    notifyListeners();
+  }
+
+  Future<void> saveSettings(SessionSettings s) async {
+    try {
+      (await _file('settings.json')).writeAsStringSync(jsonEncode(s.toJson()));
+    } catch (e) {
+      log('app', 'could not save settings: $e');
+    }
+  }
+
+  /// Pick a roster CSV/TXT; returns a message for the user.
+  Future<String> importRoster() async {
+    final picked = await HostPlatform.pickTextFile();
+    if (picked == null) return 'No file chosen';
+    final (name, bytes) = picked;
+    final ids = parseRoster(utf8.decode(bytes, allowMalformed: true));
+    if (ids.isEmpty) {
+      return '"$name" has no numeric IDs in its first column. '
+          'In Excel use File → Save As → CSV.';
+    }
+    rosterIds = ids;
+    rosterName = name;
+    (await _file('roster.json')).writeAsStringSync(
+        jsonEncode({'name': name, 'ids': ids.toList()..sort()}));
+    log('app', 'roster "$name": ${ids.length} IDs');
+    notifyListeners();
+    return '${ids.length} IDs loaded from "$name"';
+  }
+
+  Future<void> clearRoster() async {
+    rosterIds = {};
+    rosterName = null;
+    final f = await _file('roster.json');
+    if (f.existsSync()) f.deleteSync();
+    notifyListeners();
+  }
+
+  // ---- in-session actions (native dashboard) ----
+
+  /// Write the CSVs now (session keeps running); returns their paths.
+  List<String> exportNow() => server?.exportNow('manual').all ?? const [];
+
+  void resetDevices() {
+    server?.resetDevices();
+    log('app', 'device locks reset (new take)');
+    notifyListeners();
+  }
+
+  /// Export this subject, clear it, and continue with a new one.
+  Future<String?> newSubject(String course) async {
+    final srv = server;
+    if (srv == null) return null;
+    final exported = srv.newSession(course);
+    final saved = await _saveToDownloads([
+      for (final k in const ['Final', 'Raw', 'Audited'])
+        if (File('${srv.exportDir}/${exported.replaceAll('_Final.csv', '_$k.csv')}').existsSync())
+          '${srv.exportDir}/${exported.replaceAll('_Final.csv', '_$k.csv')}',
+    ]);
+    log('app', 'new subject "${srv.config.courseName}"; previous saved: ${saved.join(', ')}');
+    notifyListeners();
+    return exported;
   }
 
   /// Looks for the newest journal that never reached "ended".
@@ -121,12 +255,18 @@ class HostController extends ChangeNotifier {
       log('app', 'cloudflared: $binaryPath '
           '(${bin.existsSync() ? '${bin.lengthSync()} bytes' : 'MISSING'})');
 
+      await saveSettings(s);
+      final ips = s.localNetwork ? await localIPv4s() : const <String>[];
       final cfg = ServerConfig()
         ..courseName = s.course.trim().isEmpty ? 'Session' : s.course.trim()
         ..pageSecret = randomHex()
         ..geofence = s.geofence
         ..auditRadiusKm = s.radiusKm
-        ..forceSingleOrigin = s.tunnels <= 1;
+        ..roster = {...rosterIds}
+        // Redirecting everyone to the one tunnel would break students who
+        // came in over the local network, so only do it without LAN mode.
+        ..forceSingleOrigin = s.tunnels <= 1 && !s.localNetwork
+        ..adminCidrs = s.localNetwork && s.lanDashboard ? adminCidrsFor(ips) : [];
       if (s.password.isNotEmpty) {
         cfg.adminPwSalt = randomHex(8);
         cfg.adminPwHash = sha256Hex(cfg.adminPwSalt + s.password);
@@ -145,11 +285,19 @@ class HostController extends ChangeNotifier {
         log('app', 'resumed "${cfg.courseName}": ${srv.store.records.length} students');
       }
       await HostPlatform.startService('Starting…');
-      await srv.start(port: kPort);
+      // Loopback is enough for cloudflared; LAN mode listens on every
+      // interface so phones on the same Wi-Fi/hotspot can connect directly.
+      await srv.start(address: s.localNetwork ? '0.0.0.0' : '127.0.0.1', port: kPort);
       server = srv;
       unfinished = null;
       runningSince = DateTime.now();
-      log('server', 'attendance server on 127.0.0.1:$kPort, journal $journal');
+      lanUrls = [for (final ip in ips) 'http://$ip:$kPort'];
+      log('server', 'attendance server on ${s.localNetwork ? '0.0.0.0' : '127.0.0.1'}:$kPort, '
+          'journal $journal, roster ${cfg.roster.length} IDs'
+          '${lanUrls.isEmpty ? '' : ', local links ${lanUrls.join(' ')}'}');
+      if (s.localNetwork && ips.isEmpty) {
+        log('app', 'local-network mode is on but this phone has no Wi-Fi/hotspot address');
+      }
 
       final tm = TunnelManager(binary: binaryPath!, homeDir: p['filesDir']!, localPort: kPort);
       tm.addListener(() {
@@ -159,7 +307,7 @@ class HostController extends ChangeNotifier {
         notifyListeners();
       });
       tunnels = tm;
-      await tm.start(s.tunnels);
+      if (s.tunnels > 0) await tm.start(s.tunnels);
       _startTimers();
       log('app', 'session started with ${s.tunnels} tunnel(s)');
     } catch (e, st) {
@@ -263,6 +411,7 @@ class HostController extends ChangeNotifier {
     server = null;
     tunnels = null;
     runningSince = null;
+    lanUrls = [];
     try {
       await HostPlatform.stopService();
     } catch (_) {}

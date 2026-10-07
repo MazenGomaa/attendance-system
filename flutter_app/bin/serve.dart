@@ -2,7 +2,7 @@
 // configuration as tests/serve_python.py, for tests/scenarios.py:
 //
 //   dart run bin/serve.dart --port 8765 [--no-password] [--export-dir DIR]
-//       [--static-dir ../static] [--journal FILE] [--resume]
+//       [--static-dir ../static] [--journal FILE] [--resume] [--roster FILE]
 //
 // Test configuration: geofence on, audit radius 0.5 km, admin password "pw"
 // (unless --no-password), course "Scenario".
@@ -41,6 +41,8 @@ Future<void> main(List<String> args) async {
     ..pageSecret = randomHex()
     ..geofence = true
     ..auditRadiusKm = 0.5;
+  final roster = opt('--roster');
+  if (roster != null) config.roster = parseRoster(File(roster).readAsStringSync());
   if (!args.contains('--no-password')) {
     config
       ..adminPwSalt = 'salt'

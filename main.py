@@ -26,7 +26,7 @@ import qrcode
 import uvicorn
 
 from state import config
-from app import app
+from app import app, parse_roster
 
 PORT = int(os.environ.get("PORT", "8000"))
 
@@ -158,12 +158,8 @@ def load_roster():
     for fname in ("roster.csv", "roster.txt"):
         path = os.path.join(here, fname)
         if os.path.isfile(path):
-            ids = set()
             with open(path, encoding="utf-8-sig") as f:
-                for line in f:
-                    tok = line.strip().split(",")[0].strip()
-                    if tok.isdigit():
-                        ids.add(tok.lstrip("0") or "0")
+                ids = parse_roster(f.read())
             print(f"[roster] {len(ids)} IDs loaded from {fname} — only these accepted.")
             return ids
     print("[roster] no roster file found — any numeric ID is accepted.")

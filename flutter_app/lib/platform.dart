@@ -30,6 +30,13 @@ class HostPlatform {
   static Future<String> saveToDownloads(String path, {String mime = 'text/csv'}) async =>
       (await _ch.invokeMethod<String>('saveToDownloads', {'path': path, 'mime': mime}))!;
 
+  /// System file picker; returns (name, bytes) or null if cancelled.
+  static Future<(String, Uint8List)?> pickTextFile() async {
+    final m = await _ch.invokeMapMethod<String, Object?>('pickTextFile');
+    if (m == null) return null;
+    return (m['name'] as String, m['bytes'] as Uint8List);
+  }
+
   static Future<Map<String, Object?>> deviceInfo() async {
     final m = await _ch.invokeMapMethod<String, Object?>('deviceInfo');
     return m ?? const {};

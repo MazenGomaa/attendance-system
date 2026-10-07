@@ -630,15 +630,35 @@ class AttendanceServer {
     return _page('admin.html');
   }
 
+  /// One student as the dashboards show it: distance from the hall and flags.
+  Map<String, Object?> _studentRow(Rec r, (double, double)? center) {
+    final d = _distKm(r, center);
+    return {
+      'name': r['name'], 'id': r['id'], 'timestamp': r['timestamp'],
+      'edited': r['edited_at'] != null, 'gps': r['lat'] is num,
+      'dist_m': d == null ? null : pyRound(d * 1000),
+      'out': d != null && d > config.auditRadiusKm,
+      'shared_ip': (store.ipToRids[r['ip']]?.length ?? 0) > 1,
+    };
+  }
+
+  double? _distKm(Rec r, (double, double)? center) {
+    final lat = r['lat'], lng = r['lng'];
+    if (center == null || lat is! num || lng is! num) return null;
+    return haversineKm(center.$1, center.$2, lat.toDouble(), lng.toDouble());
+  }
+
+  /// Every student, newest first (for the app's Students tab).
+  List<Map<String, Object?>> allStudents() {
+    final center = config.geofence ? hallCenter(store.records) : null;
+    return [for (final r in store.records.reversed) _studentRow(r, center)];
+  }
+
   /// Live numbers for the web dashboard and the app's own screens.
   Map<String, Object?> stateSnapshot() {
     final rows = store.records;
     final center = config.geofence ? hallCenter(rows) : null;
-    double? distKm(Rec r) {
-      final lat = r['lat'], lng = r['lng'];
-      if (center == null || lat is! num || lng is! num) return null;
-      return haversineKm(center.$1, center.$2, lat.toDouble(), lng.toDouble());
-    }
+    double? distKm(Rec r) => _distKm(r, center);
 
     var outOfBounds = 0;
     for (final r in rows) {
@@ -647,17 +667,7 @@ class AttendanceServer {
     }
     final sharedIp = store.ipToRids.values.where((v) => v.length > 1)
         .fold<int>(0, (a, v) => a + v.length);
-    final recent = <Map<String, Object?>>[];
-    for (final r in rows.reversed.take(30)) {
-      final d = distKm(r);
-      recent.add({
-        'name': r['name'], 'id': r['id'], 'timestamp': r['timestamp'],
-        'edited': r['edited_at'] != null, 'gps': r['lat'] is num,
-        'dist_m': d == null ? null : pyRound(d * 1000),
-        'out': d != null && d > config.auditRadiusKm,
-        'shared_ip': (store.ipToRids[r['ip']]?.length ?? 0) > 1,
-      });
-    }
+    final recent = [for (final r in rows.reversed.take(30)) _studentRow(r, center)];
     return {
       'course': config.courseName, 'session_id': config.sessionId(),
       'count': rows.length, 'devices': store.idToRid.length,

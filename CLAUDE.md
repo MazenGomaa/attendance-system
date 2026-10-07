@@ -71,7 +71,7 @@ Three Python files do everything; no database, no migrations, no build pipeline.
 
 - **`workers=1` is mandatory.** Multiple workers = multiple processes = split in-memory state = broken dedup. Do not add multi-process concurrency.
 - **Atomicity via event loop.** The submit critical section avoids `await`, relying on cooperative multitasking to prevent races. Any refactor that adds an `await` inside the `resolve → dedup → write` block in `/submit` breaks this.
-- **Roster file** (`roster.csv` or `roster.txt` in the project root): optional; if present, only numeric IDs in it are accepted. First column, one per line, UTF-8-BOM safe.
+- **Roster file** (`roster.csv` or `roster.txt` in the project root; imported via a file picker in the app): optional; if present, only numeric IDs in it are accepted. First column, one per line, UTF-8-BOM safe, Arabic-Indic digits normalised, leading zeros ignored. Parsed by `parse_roster()` (`app.py`) / `parseRoster()` (Dart); `tests/roster_fixture.csv` + scenario mode `roster` keep them identical.
 - **Anti-curl page token**: HMAC signed by `config.page_secret` (generated fresh each run), valid for ~90 s (3 × 30 s buckets). `/submit` rejects requests without one.
 - **Admin password** stored as `sha256(salt + pw)` and compared with `hmac.compare_digest`. Salt and hash live only in `config` (memory) for the run.
 - **Arabic name validation**: 4+ whitespace-separated tokens, each matching `[؀-ۿ]+`, max 100 chars total.

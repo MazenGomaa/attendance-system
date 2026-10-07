@@ -9,6 +9,7 @@ import 'package:share_plus/share_plus.dart';
 import 'debug_log.dart';
 import 'platform.dart';
 import 'qr_image.dart';
+import 'server/logic.dart';
 import 'session.dart';
 import 'tunnels.dart';
 
@@ -43,6 +44,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   final _course = TextEditingController();
   final _radius = TextEditingController(text: '0.5');
   final _password = TextEditingController();
+  final _search = TextEditingController();
   Timer? _tick;
 
   @override
@@ -52,6 +54,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     c.addListener(_redraw);
     c.refreshDevice();
     c.findUnfinished();
+    c.loadSettings(settings).then((_) {
+      _course.text = settings.course;
+      _radius.text = '${settings.radiusKm}';
+      _redraw();
+    });
     _tick = Timer.periodic(const Duration(seconds: 1), (_) {
       if (c.running) _redraw();
     });
@@ -60,6 +67,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   void _redraw() {
     if (mounted) setState(() {});
+  }
+
+  void _toast(String msg) {
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
   @override
@@ -81,88 +92,170 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       ..radiusKm = double.tryParse(_radius.text.trim()) ?? 0.5
       ..password = _password.text;
     if (settings.radiusKm < 0.05) settings.radiusKm = 0.05;
+    if (settings.tunnels == 0 && !settings.localNetwork) settings.tunnels = 1;
     c.start(settings, resume: resume);
   }
 
-  Future<void> _confirmEnd() async {
+  Future<bool> _confirm(String title, String body, String action, {bool danger = true}) async {
     final yes = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('End the session?'),
-        content: const Text('• Students can no longer submit\n'
-            '• The CSVs are saved to Download/Attendance\n'
-            '• The tunnels stop (the student links stop working)'),
+        title: Text(title),
+        content: Text(body),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.red.shade700),
+            style: danger ? FilledButton.styleFrom(backgroundColor: Colors.red.shade700) : null,
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('End session'),
+            child: Text(action),
           ),
         ],
       ),
     );
-    if (yes == true) await c.endSession();
+    return yes == true;
+  }
+
+  Future<void> _confirmEnd() async {
+    if (await _confirm('End the session?',
+        '• Students can no longer submit\n'
+        '• The CSVs are saved to Download/Attendance\n'
+        '• The tunnels stop (the student links stop working)', 'End session')) {
+      await c.endSession();
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final batteryOk = c.device['batteryOptimizationIgnored'] == true;
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Attendance Host'),
-        actions: [
-          IconButton(
-            tooltip: 'Debug',
-            icon: const Icon(Icons.bug_report),
-            onPressed: () => Navigator.push(context,
-                MaterialPageRoute(builder: (_) => DebugPage(controller: c))),
-          ),
-        ],
-      ),
-      // Actions live in a fixed bar above the system navigation buttons.
-      bottomNavigationBar: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-          child: c.running ? _runningActions() : FilledButton.icon(
-            icon: const Icon(Icons.play_arrow),
-            label: Text(c.busy ? 'Starting…' : 'Start session'),
-            onPressed: c.busy ? null : () => _start(),
+    final header = <Widget>[
+      if (!batteryOk)
+        Card(
+          color: Colors.orange.shade900,
+          child: ListTile(
+            leading: const Icon(Icons.battery_alert),
+            title: const Text('Battery optimisation is ON'),
+            subtitle: const Text('Android may freeze the server with the screen off. '
+                'Tap to allow running in the background.'),
+            onTap: HostPlatform.requestBatteryExemption,
           ),
         ),
+      if (c.lastEnd != null) _endCard(c.lastEnd!),
+    ];
+    final bottom = SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+        child: c.running ? _runningActions() : FilledButton.icon(
+          icon: const Icon(Icons.play_arrow),
+          label: Text(c.busy ? 'Starting…' : 'Start session'),
+          onPressed: c.busy ? null : () => _start(),
+        ),
       ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          if (!batteryOk)
-            Card(
-              color: Colors.orange.shade900,
-              child: ListTile(
-                leading: const Icon(Icons.battery_alert),
-                title: const Text('Battery optimisation is ON'),
-                subtitle: const Text('Android may freeze the server with the screen off. '
-                    'Tap to allow running in the background.'),
-                onTap: HostPlatform.requestBatteryExemption,
-              ),
+    );
+    final debug = IconButton(
+      tooltip: 'Debug',
+      icon: const Icon(Icons.bug_report),
+      onPressed: () => Navigator.push(context,
+          MaterialPageRoute(builder: (_) => DebugPage(controller: c))),
+    );
+
+    if (!c.running) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Attendance Host'), actions: [debug]),
+        bottomNavigationBar: bottom,
+        body: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [...header, ..._setupView()],
+        ),
+      );
+    }
+
+    final st = c.server!.stateSnapshot();
+    return DefaultTabController(
+      length: 3,
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text('${st['course']}', overflow: TextOverflow.ellipsis),
+          actions: [
+            PopupMenuButton<String>(
+              tooltip: 'Session actions',
+              onSelected: _sessionAction,
+              itemBuilder: (_) => const [
+                PopupMenuItem(value: 'export', child: Text('Export & share CSVs now')),
+                PopupMenuItem(value: 'reset', child: Text('Reset for a new take')),
+                PopupMenuItem(value: 'subject', child: Text('New subject…')),
+              ],
             ),
-          if (c.lastEnd != null) _endCard(c.lastEnd!),
-          if (c.running) ..._runningView() else ..._setupView(),
-        ],
+            debug,
+          ],
+          bottom: TabBar(tabs: [
+            const Tab(text: 'Overview'),
+            Tab(text: 'Students (${st['count']})'),
+            Tab(text: 'Log (${(st['merges'] as List).length})'),
+          ]),
+        ),
+        bottomNavigationBar: bottom,
+        body: TabBarView(children: [
+          ListView(padding: const EdgeInsets.all(16), children: [...header, ..._overview(st)]),
+          _studentsTab(st),
+          _logTab(),
+        ]),
       ),
     );
   }
 
+  Future<void> _sessionAction(String action) async {
+    switch (action) {
+      case 'export':
+        final files = c.exportNow();
+        if (files.isEmpty) return;
+        await SharePlus.instance.share(ShareParams(
+            files: [for (final p in files) XFile(p, mimeType: 'text/csv')]));
+      case 'reset':
+        if (await _confirm('Reset for a new take?',
+            'Clears device locks so every student can submit again. Records are kept; '
+            'a student who re-submits with the same ID and name updates their entry.',
+            'Reset', danger: false)) {
+          c.resetDevices();
+          _toast('Device locks reset');
+        }
+      case 'subject':
+        final name = TextEditingController();
+        final ok = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('New subject'),
+            content: Column(mainAxisSize: MainAxisSize.min, children: [
+              const Text('The current subject is saved to Download/Attendance and cleared. '
+                  'The student links stay the same.'),
+              TextField(controller: name, autofocus: true,
+                  decoration: const InputDecoration(labelText: 'New subject name')),
+            ]),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+              FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Start')),
+            ],
+          ),
+        );
+        if (ok == true) {
+          final exported = await c.newSubject(name.text);
+          _toast('Saved $exported');
+        }
+    }
+  }
+
   Widget _runningActions() {
-    final tm = c.tunnels;
-    final withUrl = tm?.tunnels.where((t) => t.url != null).toList() ?? const <Tunnel>[];
+    final withUrl = c.tunnels?.tunnels.where((t) => t.url != null).toList() ?? const <Tunnel>[];
+    final links = [
+      for (final t in withUrl) (t.url!, 'Tunnel ${t.index}'),
+      for (final (i, u) in c.lanUrls.indexed) (u, 'Local network ${i + 1}'),
+    ];
     return Row(children: [
-      if (withUrl.isNotEmpty) ...[
+      if (links.isNotEmpty) ...[
         Expanded(
           child: OutlinedButton.icon(
             icon: const Icon(Icons.share),
-            label: Text(withUrl.length > 1 ? 'Share all QR' : 'Share QR'),
-            onPressed: () => shareQrs(
-                [for (final t in withUrl) (t.url!, 'Tunnel ${t.index}')]),
+            label: Text(links.length > 1 ? 'Share all QR' : 'Share QR'),
+            onPressed: () => shareQrs(links),
           ),
         ),
         const SizedBox(width: 12),
@@ -232,17 +325,63 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               helperText: 'Flag anyone farther than this from where most students are'),
         ),
       const SizedBox(height: 8),
+      Card(
+        child: ListTile(
+          leading: const Icon(Icons.list_alt),
+          title: Text(c.rosterIds.isEmpty
+              ? 'No class list: any numeric ID is accepted'
+              : 'Class list: ${c.rosterIds.length} IDs'),
+          subtitle: Text(c.rosterName == null
+              ? 'Import a CSV/TXT with student IDs in the first column'
+              : 'From "${c.rosterName}"'),
+          trailing: Wrap(children: [
+            if (c.rosterIds.isNotEmpty)
+              IconButton(tooltip: 'Remove class list', icon: const Icon(Icons.close),
+                  onPressed: c.clearRoster),
+            IconButton(
+              tooltip: 'Import class list',
+              icon: const Icon(Icons.file_open),
+              onPressed: () async => _toast(await c.importRoster()),
+            ),
+          ]),
+        ),
+      ),
+      const SizedBox(height: 8),
       TextField(
         controller: _password,
         obscureText: true,
         decoration: const InputDecoration(labelText: 'Web dashboard password (optional)',
             helperText: 'Only for opening the dashboard in a browser; this app needs none'),
       ),
+      const SizedBox(height: 8),
+      SwitchListTile(
+        contentPadding: EdgeInsets.zero,
+        title: const Text('Also serve on this phone\'s Wi-Fi / hotspot'),
+        subtitle: const Text('Students on the same network can use a local link. '
+            'With 0 tunnels this works without internet.'),
+        value: settings.localNetwork,
+        onChanged: (v) => setState(() {
+          settings.localNetwork = v;
+          if (!v && settings.tunnels == 0) settings.tunnels = 1;
+        }),
+      ),
+      if (settings.localNetwork)
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Allow the web dashboard from the same network'),
+          subtitle: const Text('Lets e.g. a laptop on this Wi-Fi open /admin. '
+              'Set a password if others share the network.'),
+          value: settings.lanDashboard,
+          onChanged: (v) => setState(() => settings.lanDashboard = v),
+        ),
       const SizedBox(height: 16),
       const Text('Tunnels (each handles ~200 students at once)'),
       const SizedBox(height: 8),
       SegmentedButton<int>(
-        segments: [for (var i = 1; i <= 4; i++) ButtonSegment(value: i, label: Text('$i'))],
+        segments: [
+          for (var i = settings.localNetwork ? 0 : 1; i <= 4; i++)
+            ButtonSegment(value: i, label: Text('$i')),
+        ],
         selected: {settings.tunnels},
         onSelectionChanged: (s) => setState(() => settings.tunnels = s.first),
       ),
@@ -281,16 +420,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     );
   }
 
-  // -------------------------------------------------------------- running --
+  // ------------------------------------------------------------- overview --
 
-  List<Widget> _runningView() {
-    final st = c.server!.stateSnapshot();
+  List<Widget> _overview(Map<String, Object?> st) {
     final up = DateTime.now().difference(c.runningSince!);
     String two(int v) => v.toString().padLeft(2, '0');
     final geo = st['geofence'] == true;
-    final recent = (st['recent'] as List).cast<Map<String, Object?>>();
+    final roster = c.server!.config.roster.length;
     return [
-      Text('${st['course']} · up ${up.inHours}:${two(up.inMinutes % 60)}:${two(up.inSeconds % 60)}',
+      Text('Up ${up.inHours}:${two(up.inMinutes % 60)}:${two(up.inSeconds % 60)}'
+          '${roster > 0 ? ' · class list $roster IDs' : ''}',
           style: const TextStyle(color: Colors.white70)),
       const SizedBox(height: 8),
       Wrap(spacing: 8, runSpacing: 8, children: [
@@ -303,26 +442,100 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       ]),
       const SizedBox(height: 8),
       for (final t in c.tunnels?.tunnels ?? const <Tunnel>[]) _tunnelCard(t),
-      const SizedBox(height: 8),
-      Text('Recent submissions${geo ? ' · distance from the hall' : ''}',
-          style: const TextStyle(fontWeight: FontWeight.bold)),
-      if (recent.isEmpty)
-        const Padding(padding: EdgeInsets.all(8), child: Text('None yet.')),
-      for (final x in recent.take(15))
-        ListTile(
-          dense: true,
-          contentPadding: EdgeInsets.zero,
-          title: Text('${x['name']}', textDirection: TextDirection.rtl),
-          subtitle: Text('${x['id']} · ${'${x['timestamp']}'.substring(11)}'
-              '${x['edited'] == true ? ' · edited' : ''}'
-              '${x['shared_ip'] == true ? ' · shared IP' : ''}'),
-          trailing: geo
-              ? Text(_dist(x['dist_m'] as int?) + (x['out'] == true ? ' ⚠' : ''),
-                  style: TextStyle(color: x['out'] == true ? Colors.redAccent : null))
-              : null,
-        ),
+      for (final (i, u) in c.lanUrls.indexed) _linkCard(u, 'Local network ${i + 1}',
+          'For phones on this Wi-Fi / hotspot'),
+      if (c.lanUrls.isEmpty && (c.tunnels?.tunnels.isEmpty ?? true))
+        const Card(child: ListTile(
+          leading: Icon(Icons.wifi_off, color: Colors.redAccent),
+          title: Text('No student link'),
+          subtitle: Text('No tunnels and no Wi-Fi/hotspot address. Turn on the hotspot '
+              'or Wi-Fi, then end and restart the session.'),
+        )),
     ];
   }
+
+  // ------------------------------------------------------------- students --
+
+  Widget _studentsTab(Map<String, Object?> st) {
+    final geo = st['geofence'] == true;
+    final q = normalizeDigits(_search.text.trim());
+    final all = c.server!.allStudents();
+    final rows = q.isEmpty ? all : all.where((x) =>
+        '${x['id']}'.contains(q) || nameKey('${x['name']}').contains(nameKey(q))).toList();
+    return Column(children: [
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+        child: TextField(
+          controller: _search,
+          onChanged: (_) => _redraw(),
+          decoration: InputDecoration(
+            prefixIcon: const Icon(Icons.search),
+            hintText: 'Search name or ID (${all.length})',
+            suffixIcon: _search.text.isEmpty ? null : IconButton(
+                icon: const Icon(Icons.clear),
+                onPressed: () => setState(_search.clear)),
+          ),
+        ),
+      ),
+      Expanded(
+        child: rows.isEmpty
+            ? const Center(child: Text('No students yet.'))
+            : ListView.separated(
+                itemCount: rows.length,
+                separatorBuilder: (_, _) => const Divider(height: 1),
+                itemBuilder: (_, i) {
+                  final x = rows[i];
+                  final out = x['out'] == true;
+                  return ListTile(
+                    dense: true,
+                    title: Text('${x['name']}', textDirection: TextDirection.rtl),
+                    subtitle: Text('${x['id']} · ${'${x['timestamp']}'.substring(11)}'
+                        '${x['edited'] == true ? ' · edited' : ''}'
+                        '${x['shared_ip'] == true ? ' · shared IP' : ''}'
+                        '${geo && x['gps'] != true ? ' · no GPS' : ''}'),
+                    trailing: geo
+                        ? Text(_dist(x['dist_m'] as int?) + (out ? ' ⚠' : ''),
+                            style: TextStyle(color: out ? Colors.redAccent : null))
+                        : null,
+                  );
+                },
+              ),
+      ),
+    ]);
+  }
+
+  // ------------------------------------------------------------------ log --
+
+  Widget _logTab() {
+    final events = c.server!.store.events.reversed.toList();
+    if (events.isEmpty) return const Center(child: Text('No edits or conflicts yet.'));
+    return ListView.separated(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      itemCount: events.length,
+      separatorBuilder: (_, _) => const Divider(height: 1),
+      itemBuilder: (_, i) {
+        final e = events[i];
+        final kind = '${e['kind']}';
+        final color = switch (kind) {
+          'refused: ID in use' => Colors.redAccent,
+          'different student' => Colors.amber,
+          _ => Colors.greenAccent,
+        };
+        return ListTile(
+          dense: true,
+          leading: Icon(Icons.circle, size: 12, color: color),
+          title: Text(kind, style: TextStyle(color: color, fontWeight: FontWeight.bold)),
+          subtitle: Text('Was: ${e['old_id']} · ${e['old_name']}\n'
+              'Now: ${e['new_id']} · ${e['new_name']}\n'
+              '${'${e['time']}'.replaceFirst('T', ' ')} · ${e['ip']}'
+              '${e['dist_m'] == null ? '' : ' · moved ${_dist(e['dist_m'] as int?)}'}'),
+          isThreeLine: true,
+        );
+      },
+    );
+  }
+
+  // -------------------------------------------------------------- helpers --
 
   String _dist(int? m) => m == null ? '—' : (m >= 1000 ? '${(m / 1000).toStringAsFixed(2)} km' : '$m m');
 
@@ -337,6 +550,42 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               Text(label, style: const TextStyle(fontSize: 11, color: Colors.white70)),
             ]),
           ),
+        ),
+      );
+
+  Widget _linkButtons(String url, String title) => Wrap(children: [
+        TextButton.icon(
+          icon: const Icon(Icons.copy, size: 18),
+          label: const Text('Copy'),
+          onPressed: () => Clipboard.setData(ClipboardData(text: url)),
+        ),
+        TextButton.icon(
+          icon: const Icon(Icons.share, size: 18),
+          label: const Text('Share QR'),
+          onPressed: () => shareQrs([(url, title)]),
+        ),
+        TextButton.icon(
+          icon: const Icon(Icons.qr_code, size: 18),
+          label: const Text('Show QR'),
+          onPressed: () => Navigator.push(context, MaterialPageRoute(
+              builder: (_) => QrPage(url: url, title: title))),
+        ),
+      ]);
+
+  Widget _linkCard(String url, String title, String note) => Card(
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              const Icon(Icons.wifi, size: 16, color: Colors.greenAccent),
+              const SizedBox(width: 8),
+              Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
+            ]),
+            Text(note, style: const TextStyle(fontSize: 12, color: Colors.white70)),
+            const SizedBox(height: 6),
+            SelectableText(url, style: const TextStyle(color: Colors.lightBlueAccent)),
+            _linkButtons(url, title),
+          ]),
         ),
       );
 
@@ -364,24 +613,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             if (t.url != null) ...[
               const SizedBox(height: 6),
               SelectableText(t.url!, style: const TextStyle(color: Colors.lightBlueAccent)),
-              Wrap(children: [
-                TextButton.icon(
-                  icon: const Icon(Icons.copy, size: 18),
-                  label: const Text('Copy'),
-                  onPressed: () => Clipboard.setData(ClipboardData(text: t.url!)),
-                ),
-                TextButton.icon(
-                  icon: const Icon(Icons.share, size: 18),
-                  label: const Text('Share QR'),
-                  onPressed: () => shareQrs([(t.url!, 'Tunnel ${t.index}')]),
-                ),
-                TextButton.icon(
-                  icon: const Icon(Icons.qr_code, size: 18),
-                  label: const Text('Show QR'),
-                  onPressed: () => Navigator.push(context, MaterialPageRoute(
-                      builder: (_) => QrPage(url: t.url!, title: 'Tunnel ${t.index}'))),
-                ),
-              ]),
+              _linkButtons(t.url!, 'Tunnel ${t.index}'),
             ],
             if (t.restarts > 0) Text('restarted ${t.restarts}×',
                 style: const TextStyle(color: Colors.amber, fontSize: 12)),

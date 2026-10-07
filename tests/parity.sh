@@ -43,10 +43,15 @@ scenario python password "$WORK/py" \
   "$PYTHON" "$ROOT/tests/serve_python.py" --port "$PORT" --export-dir "$WORK/py"
 scenario python nopassword "$WORK/py-np" \
   "$PYTHON" "$ROOT/tests/serve_python.py" --port "$PORT" --no-password --export-dir "$WORK/py-np"
+scenario python roster "$WORK/py-r" \
+  "$PYTHON" "$ROOT/tests/serve_python.py" --port "$PORT" --roster "$ROOT/tests/roster_fixture.csv" --export-dir "$WORK/py-r"
 scenario dart password "$WORK/dart" \
   bash -c "cd '$ROOT/flutter_app' && exec '$DART' run bin/serve.dart --port $PORT --static-dir '$ROOT/static' --export-dir '$WORK/dart'"
 scenario dart nopassword "$WORK/dart-np" \
   bash -c "cd '$ROOT/flutter_app' && exec '$DART' run bin/serve.dart --port $PORT --no-password --static-dir '$ROOT/static' --export-dir '$WORK/dart-np'"
+
+scenario dart roster "$WORK/dart-r" \
+  bash -c "cd '$ROOT/flutter_app' && exec '$DART' run bin/serve.dart --port $PORT --roster '$ROOT/tests/roster_fixture.csv' --static-dir '$ROOT/static' --export-dir '$WORK/dart-r'"
 
 echo "== CSV parity (Python vs Dart)"
 if ! "$PYTHON" - "$WORK/py" "$WORK/dart" <<'EOF'

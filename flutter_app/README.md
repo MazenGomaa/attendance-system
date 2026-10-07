@@ -25,8 +25,8 @@ move signing to CI secrets before distributing more widely.
 | Phase | Scope | Status |
 |---|---|---|
 | 0 | Foreground service + wake locks, bundled cloudflared, test server, self health checks, Debug screen | done |
-| 1 | Port the attendance server to Dart (parity with the Python scenario tests), save to disk as it goes | done, testing on phone |
-| 2 | Setup / dashboard / QR / End session screens, CSV share | |
+| 1 | Port the attendance server to Dart (parity with the Python scenario tests), save to disk as it goes | done |
+| 2 | Native dashboard (Overview / Students / Log tabs, export & share, reset for a new take, new subject), class-list import, local-network (Wi-Fi/hotspot) mode, remembered settings | done, testing on phone |
 | 3 | Crash recovery, tunnel auto-restart, battery-optimisation guidance | |
 | 4 | Real classroom test | |
 
@@ -41,6 +41,22 @@ scenario suite against both servers and diffs their CSV exports; CI runs it.
 Every state change is appended to a journal (`files/sessions/*.jsonl`). If the
 app is killed mid-session, the start screen offers **Resume it** (rebuilds the
 session from the journal) or **End it & save CSVs**.
+
+## Using the app
+
+- **Setup** (remembered between sessions, except the password): course name,
+  location audit + radius, class list (CSV/TXT, IDs in the first column),
+  optional web-dashboard password, local-network mode, 0-4 tunnels.
+- **Local-network mode** listens on the phone's Wi-Fi/hotspot address too
+  (`http://<phone-ip>:8000`, shown with a QR). With 0 tunnels it works
+  without internet: turn on the hotspot and have students join it.
+  "Allow the web dashboard from the same network" lets a laptop on that
+  network open `/admin` (set a password on shared networks).
+- **While running**: Overview (counts, links, QR), Students (searchable, with
+  distance and flags), Log (edits and refused ID conflicts). The ⋮ menu has
+  Export & share now, Reset for a new take, and New subject (saves the
+  current one to `Download/Attendance` and starts the next with the same
+  links).
 
 ## How the app stays alive
 

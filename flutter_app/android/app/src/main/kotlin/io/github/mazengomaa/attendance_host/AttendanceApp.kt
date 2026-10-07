@@ -29,6 +29,9 @@ class AttendanceApp : Application() {
     /** The visible activity, if any: needed for permission prompts. */
     var currentActivity: Activity? = null
 
+    /** A file-picker request waiting for MainActivity.onActivityResult. */
+    private var pendingPick: MethodChannel.Result? = null
+
     override fun onCreate() {
         super.onCreate()
         val engine = FlutterEngine(this)
@@ -84,6 +87,7 @@ class AttendanceApp : Application() {
                         "saveToDownloads" -> result.success(saveToDownloads(
                             call.argument<String>("path")!!,
                             call.argument<String>("mime") ?: "text/csv"))
+                        "pickTextFile" -> pickTextFile(result)
                         "deviceInfo" -> result.success(deviceInfo())
                         else -> result.notImplemented()
                     }
@@ -92,6 +96,55 @@ class AttendanceApp : Application() {
                 }
             }
         FlutterEngineCache.getInstance().put(ENGINE_ID, engine)
+    }
+
+    /** System file picker (no storage permission needed); answers with
+     *  {name, bytes}, or null if the user backed out. */
+    private fun pickTextFile(result: MethodChannel.Result) {
+        val a = currentActivity
+        if (a == null) {
+            result.error("host", "app is not in the foreground", null)
+            return
+        }
+        pendingPick?.success(null)
+        pendingPick = result
+        val i = Intent(Intent.ACTION_OPEN_DOCUMENT)
+            .addCategory(Intent.CATEGORY_OPENABLE)
+            .setType("*/*")
+            .putExtra(Intent.EXTRA_MIME_TYPES, arrayOf(
+                "text/csv", "text/comma-separated-values", "text/plain",
+                "application/csv", "application/vnd.ms-excel"))
+        a.startActivityForResult(i, PICK_REQUEST)
+    }
+
+    fun onPickResult(uri: Uri?) {
+        val r = pendingPick ?: return
+        pendingPick = null
+        if (uri == null) {
+            r.success(null)
+            return
+        }
+        try {
+            var name = uri.lastPathSegment ?: "roster"
+            contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME),
+                null, null, null)?.use { c -> if (c.moveToFirst()) name = c.getString(0) }
+            val bytes = contentResolver.openInputStream(uri)!!.use { input ->
+                val out = java.io.ByteArrayOutputStream()
+                val buf = ByteArray(8192)
+                var total = 0
+                while (true) {
+                    val n = input.read(buf)
+                    if (n < 0) break
+                    total += n
+                    if (total > 2 * 1024 * 1024) throw IllegalStateException("file larger than 2 MB")
+                    out.write(buf, 0, n)
+                }
+                out.toByteArray()
+            }
+            r.success(mapOf("name" to name, "bytes" to bytes))
+        } catch (e: Exception) {
+            r.error("host", e.toString(), null)
+        }
     }
 
     /** Saves a PNG into Pictures/Attendance; returns where it went. */
@@ -169,5 +222,6 @@ class AttendanceApp : Application() {
 
     companion object {
         const val ENGINE_ID = "main"
+        const val PICK_REQUEST = 4242
     }
 }
