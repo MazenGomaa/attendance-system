@@ -99,6 +99,7 @@ class AttendanceServer {
   void _journalSession() => _journal?.write({
         'op': 'session', 'course': config.courseName,
         'started_at': config.startedAt.toIso8601String(),
+        'hall': hallToJson(config.hall),
       });
 
   /// Stop serving. Exports CSVs first unless [export] is false.
@@ -120,7 +121,8 @@ class AttendanceServer {
 
   ExportResult exportNow([String reason = 'export']) => writeExports(
       List.of(store.records), List.of(store.log), exportDir, config.sessionId(),
-      geofence: config.geofence, radiusKm: config.auditRadiusKm, reason: reason);
+      geofence: config.geofence, radiusKm: config.auditRadiusKm, hall: config.hall,
+      reason: reason);
 
   // =========================================================================
   // HTTP plumbing
@@ -209,6 +211,7 @@ class AttendanceServer {
       '/admin': {'GET': () async => _adminPage(req)},
       '/admin/state': {'GET': () async => _adminState(req)},
       '/admin/reset-devices': {'POST': () async => _adminResetDevices(req)},
+      '/admin/set-hall': {'POST': () async => _adminSetHall(req, body!)},
       '/admin/new-session': {'POST': () async => _adminNewSession(req, body!)},
       '/admin/export': {'POST': () async => _adminExport(req)},
       '/admin/download': {'GET': () async => _adminDownload(req)},
@@ -633,11 +636,14 @@ class AttendanceServer {
   /// One student as the dashboards show it: distance from the hall and flags.
   Map<String, Object?> _studentRow(Rec r, (double, double)? center) {
     final d = _distKm(r, center);
+    final w = d == null ? '' : locationCheck(d, r['acc'], config.auditRadiusKm);
+    final acc = r['acc'];
     return {
       'name': r['name'], 'id': r['id'], 'timestamp': r['timestamp'],
       'edited': r['edited_at'] != null, 'gps': r['lat'] is num,
+      'acc': acc is num ? pyRound(acc.toDouble()) : null,
       'dist_m': d == null ? null : pyRound(d * 1000),
-      'out': d != null && d > config.auditRadiusKm,
+      'out': w == 'out', 'low': w == 'low',
       'shared_ip': (store.ipToRids[r['ip']]?.length ?? 0) > 1,
     };
   }
@@ -648,22 +654,27 @@ class AttendanceServer {
     return haversineKm(center.$1, center.$2, lat.toDouble(), lng.toDouble());
   }
 
+  /// The pinned hall location if the admin set one, else the median.
+  (double, double)? _hall(List<Rec> rows) =>
+      config.geofence ? (config.hall ?? hallCenter(rows)) : null;
+
   /// Every student, newest first (for the app's Students tab).
   List<Map<String, Object?>> allStudents() {
-    final center = config.geofence ? hallCenter(store.records) : null;
+    final center = _hall(store.records);
     return [for (final r in store.records.reversed) _studentRow(r, center)];
   }
 
   /// Live numbers for the web dashboard and the app's own screens.
   Map<String, Object?> stateSnapshot() {
     final rows = store.records;
-    final center = config.geofence ? hallCenter(rows) : null;
-    double? distKm(Rec r) => _distKm(r, center);
-
-    var outOfBounds = 0;
+    final center = _hall(rows);
+    var outOfBounds = 0, lowAccuracy = 0;
     for (final r in rows) {
-      final d = distKm(r);
-      if (d != null && d > config.auditRadiusKm) outOfBounds++;
+      final d = _distKm(r, center);
+      if (d == null) continue;
+      final w = locationCheck(d, r['acc'], config.auditRadiusKm);
+      if (w == 'out') outOfBounds++;
+      if (w == 'low') lowAccuracy++;
     }
     final sharedIp = store.ipToRids.values.where((v) => v.length > 1)
         .fold<int>(0, (a, v) => a + v.length);
@@ -673,10 +684,37 @@ class AttendanceServer {
       'count': rows.length, 'devices': store.idToRid.length,
       'ip_tracking': config.ipTracking, 'geofence': config.geofence,
       'audit_radius_km': config.auditRadiusKm,
-      'out_of_bounds': outOfBounds, 'shared_ip': sharedIp,
+      'hall': hallToJson(config.hall),
+      'out_of_bounds': outOfBounds, 'low_accuracy': lowAccuracy, 'shared_ip': sharedIp,
       'submissions': store.log.length,
       'merges': store.events.reversed.take(30).toList(), 'recent': recent,
     };
+  }
+
+  /// Pin the hall to a location (the admin's phone, in the room), or clear
+  /// the pin with null to go back to the median of the students' fixes.
+  void setHall((double, double)? hall) {
+    config.hall = hall;
+    _journal?.write({'op': 'hall', 'hall': hallToJson(hall)});
+    if (hall != null) {
+      stdout.writeln('[hall] pinned to (${hall.$1.toStringAsFixed(5)}, '
+          '${hall.$2.toStringAsFixed(5)})');
+    }
+  }
+
+  _Reply _adminSetHall(HttpRequest req, List<int> body) {
+    if (!_checkAdmin(req)) return _reject('unauthorized', 401);
+    final data = _jsonBody(body) ?? const {};
+    final lat = data['lat'], lng = data['lng'];
+    if (lat == null && lng == null) {
+      setHall(null);
+      return _json({'ok': true, 'hall': null});
+    }
+    if (lat is! num || lng is! num || !(lat >= -90 && lat <= 90) || !(lng >= -180 && lng <= 180)) {
+      return _reject('invalid location', 422);
+    }
+    setHall((lat.toDouble(), lng.toDouble()));
+    return _json({'ok': true, 'hall': hallToJson(config.hall)});
   }
 
   _Reply _adminState(HttpRequest req) {
@@ -709,7 +747,8 @@ class AttendanceServer {
     _journalSession();
     try {
       final res = writeExports(rows, log, exportDir, oldBase,
-          geofence: config.geofence, radiusKm: config.auditRadiusKm, reason: 'new-session');
+          geofence: config.geofence, radiusKm: config.auditRadiusKm, hall: config.hall,
+          reason: 'new-session');
       return res.finalPath.split('/').last;
     } catch (e) {
       stderr.writeln('[export:new-session] ERROR: $e');

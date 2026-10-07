@@ -33,6 +33,14 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    override fun onRequestPermissionsResult(
+        requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == AttendanceApp.LOCATION_REQUEST) {
+            (application as AttendanceApp).onLocationPermission()
+        }
+    }
+
     override fun provideFlutterEngine(context: Context): FlutterEngine? =
         FlutterEngineCache.getInstance().get(AttendanceApp.ENGINE_ID)
 

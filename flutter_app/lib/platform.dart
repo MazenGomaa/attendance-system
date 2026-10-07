@@ -47,6 +47,13 @@ class HostPlatform {
 
   static Future<void> openUrl(String url) => _ch.invokeMethod('openUrl', {'url': url});
 
+  /// This phone's best location within ~20 s: {lat, lng, acc, provider} or
+  /// {error: denied | off | none}. Asks for the permission if needed.
+  static Future<Map<String, Object?>> currentLocation() async {
+    final m = await _ch.invokeMapMethod<String, Object?>('currentLocation');
+    return m ?? const {'error': 'none'};
+  }
+
   static Future<Map<String, Object?>> deviceInfo() async {
     final m = await _ch.invokeMapMethod<String, Object?>('deviceInfo');
     return m ?? const {};

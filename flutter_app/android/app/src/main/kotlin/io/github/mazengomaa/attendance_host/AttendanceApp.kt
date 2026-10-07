@@ -7,9 +7,14 @@ import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
 import android.provider.MediaStore
 import android.provider.Settings
@@ -31,6 +36,9 @@ class AttendanceApp : Application() {
 
     /** A file-picker request waiting for MainActivity.onActivityResult. */
     private var pendingPick: MethodChannel.Result? = null
+
+    /** A location request waiting for the permission prompt's answer. */
+    private var pendingLocation: MethodChannel.Result? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -102,6 +110,7 @@ class AttendanceApp : Application() {
                             result.success(true)
                         }
                         "deviceInfo" -> result.success(deviceInfo())
+                        "currentLocation" -> currentLocation(result)
                         else -> result.notImplemented()
                     }
                 } catch (e: Exception) {
@@ -284,8 +293,86 @@ class AttendanceApp : Application() {
         )
     }
 
+    private fun locationGranted() =
+        checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED ||
+        checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED
+
+    /**
+     * This phone's location, for pinning the hall: listens to GPS and network
+     * for up to 20 s and returns the most precise fix ({lat, lng, acc,
+     * provider}), or {error: "denied" | "off" | "none"}. Asks for permission
+     * first if needed.
+     */
+    private fun currentLocation(result: MethodChannel.Result) {
+        if (locationGranted()) {
+            fetchLocation(result)
+            return
+        }
+        val a = currentActivity
+        if (a == null) {
+            result.error("host", "app is not in the foreground", null)
+            return
+        }
+        pendingLocation?.success(mapOf("error" to "denied"))
+        pendingLocation = result
+        a.requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.ACCESS_COARSE_LOCATION), LOCATION_REQUEST)
+    }
+
+    fun onLocationPermission() {
+        val r = pendingLocation ?: return
+        pendingLocation = null
+        if (locationGranted()) fetchLocation(r) else r.success(mapOf("error" to "denied"))
+    }
+
+    @Suppress("MissingPermission")
+    private fun fetchLocation(result: MethodChannel.Result) {
+        val lm = getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        val providers = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
+            .filter { runCatching { lm.isProviderEnabled(it) }.getOrDefault(false) }
+        if (providers.isEmpty()) {
+            result.success(mapOf("error" to "off"))
+            return
+        }
+        val main = Handler(Looper.getMainLooper())
+        var best: Location? = null
+        var done = false
+        lateinit var listener: LocationListener
+        fun finish() {
+            if (done) return
+            done = true
+            runCatching { lm.removeUpdates(listener) }
+            val b = best
+            result.success(if (b == null) mapOf("error" to "none") else mapOf(
+                "lat" to b.latitude, "lng" to b.longitude,
+                "acc" to (if (b.hasAccuracy()) b.accuracy.toDouble() else 0.0),
+                "provider" to (b.provider ?: "")))
+        }
+        listener = object : LocationListener {
+            override fun onLocationChanged(loc: Location) {
+                val b = best
+                if (b == null || (loc.hasAccuracy() && (!b.hasAccuracy() || loc.accuracy < b.accuracy))) {
+                    best = loc
+                }
+                val now = best!!
+                if (now.hasAccuracy() && now.accuracy <= 15f) finish()
+            }
+            override fun onProviderEnabled(provider: String) {}
+            override fun onProviderDisabled(provider: String) {}
+            @Deprecated("Required on Android 9 and older")
+            override fun onStatusChanged(provider: String?, status: Int, extras: android.os.Bundle?) {}
+        }
+        for (p in providers) {
+            runCatching { lm.requestLocationUpdates(p, 0L, 0f, listener, Looper.getMainLooper()) }
+        }
+        main.postDelayed({ finish() }, 20000L)
+    }
+
     companion object {
         const val ENGINE_ID = "main"
         const val PICK_REQUEST = 4242
+        const val LOCATION_REQUEST = 4243
     }
 }

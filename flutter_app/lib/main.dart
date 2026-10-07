@@ -182,10 +182,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             PopupMenuButton<String>(
               tooltip: 'Session actions',
               onSelected: _sessionAction,
-              itemBuilder: (_) => const [
-                PopupMenuItem(value: 'export', child: Text('Export & share CSVs now')),
-                PopupMenuItem(value: 'reset', child: Text('Reset for a new take')),
-                PopupMenuItem(value: 'subject', child: Text('New subject…')),
+              itemBuilder: (_) => [
+                const PopupMenuItem(value: 'export', child: Text('Export & share CSVs now')),
+                const PopupMenuItem(value: 'reset', child: Text('Reset for a new take')),
+                const PopupMenuItem(value: 'subject', child: Text('New subject…')),
+                if (st['geofence'] == true)
+                  const PopupMenuItem(value: 'hall', child: Text('Pin hall to this phone')),
+                if (st['geofence'] == true && st['hall'] != null)
+                  const PopupMenuItem(value: 'unhall', child: Text('Unpin hall')),
               ],
             ),
             debug,
@@ -291,7 +295,44 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           final exported = await c.newSubject(name.text);
           _toast('Saved $exported');
         }
+      case 'hall':
+        await _pinHall();
+      case 'unhall':
+        c.setHall(null);
+        _toast("Hall unpinned: using the students' median again");
     }
+  }
+
+  /// Use this phone's position as the hall centre: the professor's phone is
+  /// in the room, so it beats a median when many students get coarse fixes.
+  Future<void> _pinHall() async {
+    _toast('Getting this phone\'s location (up to 20 s)…');
+    final Map<String, Object?> r;
+    try {
+      r = await HostPlatform.currentLocation();
+    } catch (e) {
+      _toast('Location failed: $e');
+      return;
+    }
+    if (!mounted) return;
+    final err = r['error'];
+    if (err != null) {
+      _toast(switch (err) {
+        'denied' => 'Location permission denied',
+        'off' => 'Turn on Location in the phone settings first',
+        _ => 'No location fix: try again near a window',
+      });
+      return;
+    }
+    final lat = (r['lat'] as num).toDouble(), lng = (r['lng'] as num).toDouble();
+    final acc = (r['acc'] as num?)?.toDouble() ?? 0;
+    if (acc > 100 && !await _confirm('Imprecise location',
+        'This phone\'s location is only accurate to ±${acc.round()} m. Pin the hall here anyway?',
+        'Pin', danger: false)) {
+      return;
+    }
+    c.setHall((lat, lng), acc: acc);
+    _toast('Hall pinned (±${acc.round()} m, ${r['provider']})');
   }
 
   Widget _runningActions() {
@@ -485,7 +526,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final roster = c.server!.config.roster.length;
     return [
       Text('Up ${up.inHours}:${two(up.inMinutes % 60)}:${two(up.inSeconds % 60)}'
-          '${roster > 0 ? ' · class list $roster IDs' : ''}',
+          '${roster > 0 ? ' · class list $roster IDs' : ''}'
+          '${geo ? (st['hall'] != null ? ' · hall pinned' : ' · hall = students\' median') : ''}',
           style: const TextStyle(color: Colors.white70)),
       const SizedBox(height: 8),
       Wrap(spacing: 8, runSpacing: 8, children: [
@@ -494,6 +536,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         _stat('Edits / conflicts', '${(st['merges'] as List).length}'),
         if (geo) _stat('Out of bounds', '${st['out_of_bounds']}',
             alert: (st['out_of_bounds'] as int) > 0),
+        if (geo) _stat('Low accuracy', '${st['low_accuracy']}'),
         _stat('On a shared IP', '${st['shared_ip']}'),
       ]),
       const SizedBox(height: 8),
@@ -532,7 +575,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 separatorBuilder: (_, _) => const Divider(height: 1),
                 itemBuilder: (_, i) {
                   final x = rows[i];
-                  final out = x['out'] == true;
+                  final out = x['out'] == true, low = x['low'] == true;
                   return ListTile(
                     dense: true,
                     title: Text('${x['name']}', textDirection: TextDirection.rtl),
@@ -541,8 +584,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                         '${x['shared_ip'] == true ? ' · shared IP' : ''}'
                         '${geo && x['gps'] != true ? ' · no GPS' : ''}'),
                     trailing: geo
-                        ? Text(_dist(x['dist_m'] as int?) + (out ? ' ⚠' : ''),
-                            style: TextStyle(color: out ? Colors.redAccent : null))
+                        ? Text(_dist(x['dist_m'] as int?) +
+                                (x['acc'] != null ? '\n±${x['acc']} m' : '') +
+                                (out ? ' ⚠' : low ? ' ?' : ''),
+                            textAlign: TextAlign.end,
+                            style: TextStyle(color: out ? Colors.redAccent
+                                : low ? Colors.amber : null))
                         : null,
                   );
                 },

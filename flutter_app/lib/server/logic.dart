@@ -108,18 +108,34 @@ double _median(List<double> xs) {
   return n.isOdd ? s[n ~/ 2] : (s[n ~/ 2 - 1] + s[n ~/ 2]) / 2;
 }
 
-/// Median of all GPS points: robust to a minority of remote cheaters.
+/// Fixes with a wider error circle than this are coarse network guesses (cell
+/// tower / Wi-Fi): they don't decide where the hall is, and they can't prove a
+/// student is outside it.
+const preciseAccM = 100;
+
+/// Median of the precise GPS points (all points if none are precise):
+/// robust to a minority of remote cheaters and to coarse indoor fixes.
 (double, double)? hallCenter(Iterable<Map<String, Object?>> rows) {
-  final lats = <double>[], lngs = <double>[];
+  final all = <(double, double)>[], precise = <(double, double)>[];
   for (final r in rows) {
-    final lat = r['lat'], lng = r['lng'];
+    final lat = r['lat'], lng = r['lng'], acc = r['acc'];
     if (lat is num && lng is num) {
-      lats.add(lat.toDouble());
-      lngs.add(lng.toDouble());
+      final p = (lat.toDouble(), lng.toDouble());
+      all.add(p);
+      if (acc is num && acc > 0 && acc <= preciseAccM) precise.add(p);
     }
   }
-  if (lats.isEmpty) return null;
-  return (_median(lats), _median(lngs));
+  final pts = precise.isNotEmpty ? precise : all;
+  if (pts.isEmpty) return null;
+  return (_median([for (final p in pts) p.$1]), _median([for (final p in pts) p.$2]));
+}
+
+/// '' inside, 'out' when even the nearest edge of the fix's error circle is
+/// outside the radius, 'low' when only an imprecise fix puts it outside.
+String locationCheck(double dKm, Object? acc, double radiusKm) {
+  if (dKm <= radiusKm) return '';
+  final a = acc is num && acc > 0 ? acc.toDouble() : 0.0;
+  return dKm * 1000 - a > radiusKm * 1000 ? 'out' : 'low';
 }
 
 /// Neutralise spreadsheet formulas (=, +, -, @) in free-text CSV cells.

@@ -168,6 +168,16 @@ class HostController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Pin the hall to a location (this phone, in the room), or null to go back
+  /// to the median of the students' fixes.
+  void setHall((double, double)? hall, {double? acc}) {
+    server?.setHall(hall);
+    log('app', hall == null ? 'hall unpinned'
+        : 'hall pinned to ${hall.$1.toStringAsFixed(5)}, ${hall.$2.toStringAsFixed(5)}'
+          '${acc == null ? '' : ' (±${acc.round()} m)'}');
+    notifyListeners();
+  }
+
   /// Export this subject, clear it, and continue with a new one.
   Future<String?> newSubject(String course) async {
     final srv = server;

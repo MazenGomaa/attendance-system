@@ -25,6 +25,8 @@ class Config:
     roster: set = field(default_factory=set)
     geofence: bool = False
     audit_radius_km: float = 2.0
+    # Hall centre pinned by the admin ((lat, lng)); None = median of precise fixes.
+    hall: object = None
     page_secret: str = ""
     throttle_n: int = 15
     throttle_window: int = 20

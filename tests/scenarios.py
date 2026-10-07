@@ -85,10 +85,10 @@ class Client:
     def token(self, dev):
         return self.post("/api/init", {"deviceId": dev}).json()["page_token"]
 
-    def submit(self, dev, sid, name, lat=HALL[0], lng=HALL[1]):
+    def submit(self, dev, sid, name, lat=HALL[0], lng=HALL[1], acc=20):
         return self.post("/submit", {"id": sid, "name": name, "deviceId": dev,
                                      "page_token": self.token(dev),
-                                     "lat": lat, "lng": lng, "accuracy": 20})
+                                     "lat": lat, "lng": lng, "accuracy": acc})
 
 
 class Resp:
@@ -151,6 +151,11 @@ def run_password_mode(base):
     f = Client(base, "41.4.4.4")
     f.submit("dev-ffffffff", "1003", NAMES["omar"], lat=30.10, lng=31.30)
 
+    # 6b) Coarse cell-tower fix (±2 km) ~0.85 km off -> low accuracy, not out
+    #     (and it must not drag the hall centre: only precise fixes count)
+    Client(base, "41.4.4.5").submit("dev-ffffff06", "1006", NAMES["mohamed"],
+                                    lat=HALL[0] + 0.0076, lng=HALL[1], acc=2000)
+
     # 7) Validation
     g = Client(base, "41.5.5.5")
     check("invalid ID -> 422", g.submit("dev-gggggggg", "12a", NAMES["omar"]).status == 422)
@@ -179,8 +184,14 @@ def run_password_mode(base):
     r = adm.admin_post("/admin/login", {"pw": "pw"})
     check("admin login", r.status == 200, r.text)
     st = adm.get("/admin/state").json()
-    check("state: 4 students", st.get("count") == 4, st.get("count"))
+    check("state: 5 students", st.get("count") == 5, st.get("count"))
     check("state: out_of_bounds == 1", st.get("out_of_bounds") == 1, st.get("out_of_bounds"))
+    check("state: low_accuracy == 1", st.get("low_accuracy") == 1, st.get("low_accuracy"))
+    coarse = [x for x in st.get("recent", []) if x.get("id") == "1006"]
+    check("state: coarse fix is low accuracy, not out",
+          bool(coarse) and coarse[0]["low"] and not coarse[0]["out"] and coarse[0]["acc"] == 2000,
+          coarse)
+    check("state: no hall pinned", st.get("hall") is None, st.get("hall"))
     check("state: shared_ip >= 2", st.get("shared_ip", 0) >= 2, st.get("shared_ip"))
     far = [x for x in st.get("recent", []) if x.get("id") == "1003"]
     check("state: far student out, distance in metres",
@@ -188,6 +199,23 @@ def run_password_mode(base):
     kinds = [m.get("kind") for m in st.get("merges", [])]
     check("state: edit kinds recorded",
           "ID corrected" in kinds and "refused: ID in use" in kinds, kinds)
+
+    # 8b) Pin the hall (admin's phone in the room), then unpin
+    check("set-hall without header -> 403",
+          adm.post("/admin/set-hall", {"lat": 30.10, "lng": 31.30}).status == 403)
+    check("set-hall bad lat -> 422",
+          adm.admin_post("/admin/set-hall", {"lat": 91, "lng": 31}).status == 422)
+    check("set-hall non-number -> 422",
+          adm.admin_post("/admin/set-hall", {"lat": "30", "lng": 31}).status == 422)
+    r = adm.admin_post("/admin/set-hall", {"lat": 30.10, "lng": 31.30})
+    check("set-hall pins", r.status == 200 and r.json().get("hall") == [30.10, 31.30], r.text)
+    st = adm.get("/admin/state").json()
+    far = [x for x in st.get("recent", []) if x.get("id") == "1003"]
+    check("pinned hall: far student now inside", bool(far) and not far[0]["out"], far)
+    check("pinned hall: the rest are out (4)", st.get("out_of_bounds") == 4, st.get("out_of_bounds"))
+    r = adm.admin_post("/admin/set-hall", {})
+    check("set-hall {} unpins", r.status == 200 and r.json().get("hall") is None, r.text)
+    check("unpinned: back to median", adm.get("/admin/state").json().get("out_of_bounds") == 1)
     check("admin export without header -> 403", adm.post("/admin/export", {}).status == 403)
     r = adm.admin_post("/admin/export")
     check("admin export", r.status == 200 and r.json().get("ok"), r.text)
@@ -197,16 +225,24 @@ def run_password_mode(base):
     fin = rows(adm.get("/admin/download?file=final"))
     aud = rows(adm.get("/admin/download?file=audited"))
     actions = [(x["Action"], x["ID"]) for x in raw]
-    check("Raw: every submission incl. refused (8)", len(raw) == 8, actions)
+    check("Raw: every submission incl. refused (9)", len(raw) == 9, actions)
     check("Raw: keeps the overwritten typo ID", any(x["Prev_ID"] == "1001" for x in raw), actions)
     check("Raw: refused row present", any(x["Action"] == "refused" for x in raw), actions)
-    check("Final: one row per student (4)", len(fin) == 4, len(fin))
+    check("Final: one row per student (5)", len(fin) == 5, len(fin))
     sara = [x for x in fin if x["ID"] == "1002"]
     check("Final: shared-IP columns", bool(sara) and sara[0]["SameIP_IDs"] != "", sara)
     check("Maps link in every file",
           all(f and f[0]["Maps_Link"].startswith("https://www.google.com/maps?q=") for f in (raw, fin, aud)))
     check("Audited: far student flagged out of bounds",
           any(x["ID"] == "1003" and "Out of bounds" in x["Status"] for x in aud))
+    st6 = next((x["Status"] for x in aud if x["ID"] == "1006"), "")
+    check("Audited: coarse fix -> SUSPECT low accuracy, not out of bounds",
+          st6.startswith("SUSPECT") and "Low accuracy (±2000 m)" in st6
+          and "Out of bounds" not in st6, st6)
+    st2 = next((x["Status"] for x in aud if x["ID"] == "1002"), "")
+    st5 = next((x["Status"] for x in aud if x["ID"] == "1005"), "")
+    check("Audited: same IP + same spot -> duplicate location", "duplicate location" in st2, st2)
+    check("Audited: same spot alone is not a duplicate", st5 == "Valid", st5)
     check("download bad kind -> 400", adm.get("/admin/download?file=../x").status == 400)
 
     # 10) Security headers, limits, static
@@ -228,7 +264,7 @@ def run_password_mode(base):
     r = a.submit("dev-aaaaaaaa", "1009", NAMES["mohamed"])
     check("after reset: same ID + name updates (no duplicate)",
           r.json().get("mode") == "updated", r.text)
-    check("after reset: still 4 students", adm.get("/admin/state").json().get("count") == 4)
+    check("after reset: still 5 students", adm.get("/admin/state").json().get("count") == 5)
 
     # 12) End session: closes attendance (server then shuts down)
     r = adm.admin_post("/admin/end-session")

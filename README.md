@@ -133,7 +133,8 @@ Open `http://localhost:8000/admin` on the host machine (or the admin URL printed
 
 The dashboard auto-refreshes every 2 s and shows:
 - Live counts: submissions, students, edits/conflicts, out of bounds (geofence on), students on a shared IP
-- The 30 most recent submissions with their distance from the median hall position (out-of-bounds in red)
+- The 30 most recent submissions with their distance from the hall and the fix's accuracy (out of bounds in red, low accuracy in amber)
+- **Pin hall to this device's location**: open the dashboard on a phone in the room (localhost or an https link) to use its position as the hall centre instead of the students' median
 - Every edit (labelled *same student*, *ID corrected*, *name corrected* or *different student*) and every refused attempt to use an ID that's already registered
 
 Press **Ctrl+C** (or **End session** on the admin page) to stop the server; the CSVs are exported automatically on shutdown.
@@ -206,7 +207,9 @@ The server binds to `localhost:8000`. Each Cloudflare tunnel is a local `cloudfl
 
 ### GPS audit (when geofencing is on)
 
-Location is **not** checked in real time. Instead, every student's GPS coordinate is stored and, at export time, the median of all coordinates is computed (the lecture hall centre — robust to a minority of remote cheaters). Anyone farther than `audit_radius_km` (configurable at startup, default 0.5 km) is flagged in `_Audited.csv`. Additional flags: shared IP, duplicate GPS location (likely same phone), and zero accuracy (possible spoofed coordinate).
+Location is **not** checked in real time. The student page watches the phone's location for up to 10 s and sends the most precise fresh reading (indoors the first reading is often a coarse cell-tower or Wi-Fi guess, ±100 m to ±2 km, or a cached one from elsewhere). Every coordinate is stored with its accuracy and, at export time, the hall centre is the admin's pinned location if set, else the median of the precise fixes (accuracy ≤ 100 m; robust to a minority of remote cheaters).
+
+A student is **Out of bounds** (FLAGGED) only when even the near edge of their error circle is beyond `audit_radius_km` (distance − accuracy > radius). A coarse fix that only *might* be outside is marked **Low accuracy (±N m)** (SUSPECT) instead: check its Maps link. Additional flags: shared IP, duplicate location (same IP *and* within 8 m: one phone or hotspot registering friends), and zero accuracy (possible spoofed coordinate).
 
 ### Security
 
@@ -257,8 +260,8 @@ Location is **not** checked in real time. Instead, every student's GPS coordinat
 
 | Column | Description |
 |--------|-------------|
-| Distance_km | Distance from median class location |
-| Status | `Valid`, `SUSPECT: …`, or `FLAGGED: …` (out of bounds, no GPS, shared IP, duplicate location, same name, no accuracy) |
+| Distance_km | Distance from the hall (pinned, or median of precise fixes) |
+| Status | `Valid`, `SUSPECT: …`, or `FLAGGED: …` (out of bounds, no GPS, low accuracy, shared IP, duplicate location, same name, no accuracy) |
 
 ---
 

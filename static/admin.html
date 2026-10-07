@@ -35,6 +35,9 @@
   .pill.err { background:rgba(255,90,95,.16); color:var(--err); }
   .stat.alert .n { color:var(--err); }
   td.out { color:var(--err); font-weight:700; }
+  td.low { color:#ffb020; }
+  .hallrow { margin-top:10px; display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+  .hallrow button { padding:8px 12px; }
   .hint { color:var(--mut); font-size:.75rem; }
   .empty { color:var(--mut); font-size:.85rem; padding:8px 0; }
   button.end { background:#3a1418; border-color:var(--err); color:var(--err); font-weight:700; }
@@ -55,9 +58,13 @@
   <div class="meta" id="session"></div>
 
   <div class="geo" id="geoPanel" style="display:none">
-    📍 Geofence ON — students must allow location. A median-based GPS audit runs
-    at export and writes a separate <b>_Audited.csv</b> flagging anyone outside
-    <span id="rad">2</span> km, plus shared-IP / duplicate-location suspects.
+    📍 Geofence ON — students must allow location. A GPS audit runs at export and
+    writes a separate <b>_Audited.csv</b> flagging anyone outside
+    <span id="rad">2</span> km (coarse ±100 m+ fixes are marked "Low accuracy"
+    instead), plus shared-IP / duplicate-location suspects.
+    <div class="hallrow">Hall centre: <b id="hallSrc">median of students' precise fixes</b>
+      <button id="pinHall">📍 Pin hall to this device's location</button>
+      <button id="unpinHall" style="display:none">Unpin</button></div>
   </div>
 
   <div class="ended" id="endedPanel" style="display:none"></div>
@@ -67,6 +74,7 @@
     <div class="stat"><div class="n" id="devices">0</div><div class="l">Students</div></div>
     <div class="stat"><div class="n" id="mergeN">0</div><div class="l">Edits / conflicts</div></div>
     <div class="stat" id="oobStat" style="display:none"><div class="n" id="oob">0</div><div class="l">Out of bounds</div></div>
+    <div class="stat" id="lowStat" style="display:none"><div class="n" id="low">0</div><div class="l">Low accuracy</div></div>
     <div class="stat"><div class="n" id="sharedIp">0</div><div class="l">On a shared IP</div></div>
   </div>
 
@@ -86,7 +94,7 @@
     <tbody id="merges"></tbody>
   </table>
 
-  <h2>Recent submissions <span class="hint">(last 30 · distance from the median hall position)</span></h2>
+  <h2>Recent submissions <span class="hint">(last 30 · distance from the hall, ± fix accuracy)</span></h2>
   <table>
     <thead><tr><th>Name</th><th>ID</th><th>Time</th><th>Distance</th></tr></thead>
     <tbody id="rows"></tbody>

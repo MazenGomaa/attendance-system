@@ -64,6 +64,7 @@ void main() {
     expect((await a.submit('1009', 'محمد احمد علي حسن'))['mode'], 'updated');
     expect((await c.submit('1002', 'خالد يوسف عمر احمد'))['ok'], false);   // refused
     s1.resetDevices();
+    s1.setHall((30.05, 31.24));
     // "Crash": no export, no clean shutdown.
     await s1.stop(export: false);
 
@@ -80,6 +81,7 @@ void main() {
     expect(s2.store.events.map((e) => e['kind']), ['ID corrected', 'refused: ID in use']);
     expect(s2.store.idToRid.keys.toSet(), {'1009', '1002'});
     expect(s2.store.clientToRid, isEmpty);   // the reset was replayed too
+    expect(cfg2.hall, (30.05, 31.24));        // and the pinned hall
 
     // The resumed server keeps working: after the reset, same ID + name updates.
     await s2.start(port: 0);
@@ -99,6 +101,24 @@ void main() {
     expect((again['record'] as Map)['id'], '1003');
     await s3.stop(export: false);
     await Directory(dir).delete(recursive: true);
+  });
+
+  test('coarse fixes are low accuracy, not out of bounds; median ignores them', () {
+    expect(locationCheck(0.3, 20, 0.5), '');
+    expect(locationCheck(0.847, 2000, 0.5), 'low');   // cell-tower centroid
+    expect(locationCheck(2.5, 2000, 0.5), 'low');
+    expect(locationCheck(3.0, 2000, 0.5), 'out');     // even the near edge is outside
+    expect(locationCheck(2.0, 20, 0.5), 'out');
+    expect(locationCheck(2.0, 0, 0.5), 'out');
+    final rows = [
+      {'lat': 30.0, 'lng': 31.0, 'acc': 15},
+      {'lat': 30.0, 'lng': 31.0, 'acc': 20},
+      {'lat': 30.1, 'lng': 31.1, 'acc': 2000},
+      {'lat': 30.1, 'lng': 31.1, 'acc': 2000},
+      {'lat': 30.1, 'lng': 31.1, 'acc': 2000},
+    ];
+    expect(hallCenter(rows), (30.0, 31.0));
+    expect(hallCenter(rows.skip(2)), (30.1, 31.1));   // none precise: use them all
   });
 
   test('Arabic-Indic digits normalise and spelling variants fold', () {

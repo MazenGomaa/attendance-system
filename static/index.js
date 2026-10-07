@@ -43,6 +43,38 @@ nameEl.addEventListener('input', liveCheck);
 
 function lockInputs(locked) { idEl.disabled = nameEl.disabled = locked; }
 
+// Location: the first fix a phone reports indoors is often a coarse network
+// guess (±100 m to ±2 km) or a cached one from elsewhere. Watch for a few
+// seconds and keep the most precise fresh reading instead.
+const GEO_GOOD_M = 30;          // stop as soon as a reading is this precise
+const GEO_SETTLE_MS = 10000;    // otherwise settle 10 s after the first reading
+const GEO_TIMEOUT_MS = 20000;   // no reading at all by then -> error
+const GEO_STALE_MS = 60000;     // readings older than this are cached, not live
+let geoWatch = null, geoTimers = [], geoBest = null, geoDone = false;
+
+function stopWatch() {
+  if (geoWatch !== null) navigator.geolocation.clearWatch(geoWatch);
+  geoWatch = null; geoTimers.forEach(clearTimeout); geoTimers = [];
+}
+function finishLocation() {
+  stopWatch(); geoDone = true;
+  if (!geoBest) return;
+  coords = { lat: geoBest.lat, lng: geoBest.lng, acc: geoBest.acc };
+  geo.className = 'geo ok';
+  geo.textContent = '✅ تم تأكيد الموقع (±' + Math.round(geoBest.acc) + ' م) — يمكنك التسجيل الآن.';
+  liveCheck();
+}
+function locationError(code) {
+  stopWatch(); coords = null; geo.className = 'geo bad';
+  if (code === 1) {
+    geo.textContent = '❌ تم رفض إذن الموقع — يرجى تفعيله من الإعدادات.';
+  } else if (code === 3) {
+    geo.textContent = '⏱ انتهت مهلة تحديد الموقع — اضغط "المحاولة مرة أخرى".';
+  } else {
+    geo.textContent = '❌ تعذّر تحديد الموقع — اضغط "المحاولة مرة أخرى".';
+  }
+  help.style.display = 'block'; liveCheck();
+}
 function requestLocation() {
   geo.style.display = 'block'; geo.className = 'geo loading';
   geo.textContent = '📍 جارٍ تحديد الموقع… يرجى الموافقة على الإذن.';
@@ -51,27 +83,34 @@ function requestLocation() {
     geo.className = 'geo bad'; geo.textContent = 'متصفحك لا يدعم تحديد الموقع.';
     help.style.display = 'block'; return;
   }
-  navigator.geolocation.getCurrentPosition(
+  stopWatch(); coords = null; geoBest = null; geoDone = false; liveCheck();
+  let settleSet = false;
+  geoWatch = navigator.geolocation.watchPosition(
     p => {
-      coords = { lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy };
-      geo.className = 'geo ok';
-      geo.textContent = '✅ تم تأكيد الموقع — يمكنك التسجيل الآن.';
-      liveCheck();
+      if (geoDone) return;
+      const acc = p.coords.accuracy;
+      const r = { lat: p.coords.latitude, lng: p.coords.longitude,
+                  acc: (typeof acc === 'number' && isFinite(acc)) ? acc : 0,
+                  stale: !!p.timestamp && Date.now() - p.timestamp > GEO_STALE_MS };
+      // A live reading always beats a cached one; otherwise the smaller circle wins.
+      if (!geoBest || (geoBest.stale && !r.stale) ||
+          (geoBest.stale === r.stale && r.acc < geoBest.acc)) geoBest = r;
+      if (!geoBest.stale && geoBest.acc > 0 && geoBest.acc <= GEO_GOOD_M) { finishLocation(); return; }
+      if (!settleSet) { settleSet = true; geoTimers.push(setTimeout(finishLocation, GEO_SETTLE_MS)); }
+      geo.className = 'geo loading';
+      geo.textContent = '📍 جارٍ تحسين دقة الموقع… ±' + Math.round(geoBest.acc) + ' م';
     },
     err => {
-      coords = null;
-      geo.className = 'geo bad';
-      if (err.code === 1) {
-        geo.textContent = '❌ تم رفض إذن الموقع — يرجى تفعيله من الإعدادات.';
-      } else if (err.code === 3) {
-        geo.textContent = '⏱ انتهت مهلة تحديد الموقع — اضغط "المحاولة مرة أخرى".';
-      } else {
-        geo.textContent = '❌ تعذّر تحديد الموقع — اضغط "المحاولة مرة أخرى".';
-      }
-      help.style.display = 'block'; liveCheck();
+      if (geoDone) return;
+      // Denied -> error. Any other failure with a reading in hand ends the wait early.
+      if (err.code === 1 || !geoBest) locationError(err.code); else finishLocation();
     },
-    { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+    { enableHighAccuracy: true, timeout: GEO_TIMEOUT_MS, maximumAge: 0 }
   );
+  geoTimers.push(setTimeout(() => {
+    if (geoDone) return;
+    if (geoBest) finishLocation(); else locationError(3);
+  }, GEO_TIMEOUT_MS));
 }
 document.getElementById('retry').addEventListener('click', requestLocation);
 

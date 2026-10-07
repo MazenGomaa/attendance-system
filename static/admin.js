@@ -42,13 +42,20 @@ async function refresh() {
       $('oobStat').style.display = ''; $('dlAudit').style.display = '';
       $('oob').textContent = d.out_of_bounds;
       $('oobStat').classList.toggle('alert', d.out_of_bounds > 0);
+      $('lowStat').style.display = ''; $('low').textContent = d.low_accuracy;
+      $('hallSrc').textContent = d.hall
+        ? 'pinned at ' + d.hall[0].toFixed(5) + ', ' + d.hall[1].toFixed(5)
+        : "median of students' precise fixes";
+      $('unpinHall').style.display = d.hall ? '' : 'none';
     }
 
     $('rows').innerHTML = d.recent.map(x =>
       `<tr><td class="ar">${esc(x.name)}${x.edited?' <span style="color:#ffb020">✎</span>':''}${x.gps?' 📍':''}`
       + `${x.shared_ip?' <span class="pill warn">shared IP</span>':''}</td>`
       + `<td>${esc(x.id)}</td><td>${esc(x.timestamp).replace('T',' ')}</td>`
-      + `<td class="${x.out?'out':''}">${esc(fmtDist(x.dist_m))}${x.out?' ⚠ out':''}</td></tr>`).join('')
+      + `<td class="${x.out?'out':x.low?'low':''}">${esc(fmtDist(x.dist_m))}`
+      + `${x.acc!=null?' <small>±'+esc(x.acc)+' m</small>':''}`
+      + `${x.out?' ⚠ out':x.low?' ⚠ low accuracy':''}</td></tr>`).join('')
       || '<tr><td colspan="4" class="empty">No submissions yet.</td></tr>';
 
     const m = d.merges;
@@ -111,6 +118,41 @@ $('endsess').addEventListener('click', async () => {
     document.querySelectorAll('.bar button').forEach(b => { b.disabled = true; });
     window.scrollTo(0, 0);
   } catch (e) { toast('End session failed — check server'); $('endsess').disabled = false; }
+});
+
+// Pin the hall to where this device is (open the dashboard on a phone in the
+// room). Needs location permission: works on localhost or an https link.
+$('pinHall').addEventListener('click', () => {
+  if (!navigator.geolocation) { toast('This browser has no location'); return; }
+  const b = $('pinHall'); b.disabled = true; b.textContent = '📍 Locating…';
+  let best = null, watch = null, finished = false;
+  const done = async () => {
+    if (finished) return;
+    finished = true;
+    if (watch !== null) navigator.geolocation.clearWatch(watch);
+    watch = null; b.disabled = false; b.textContent = "📍 Pin hall to this device's location";
+    if (!best) { toast('Could not get a location'); return; }
+    if (best.acc > 100 && !confirm('This location is only accurate to ±' + Math.round(best.acc)
+        + ' m. Pin it anyway?')) return;
+    try {
+      const d = await (await adminPost('/admin/set-hall', { lat: best.lat, lng: best.lng })).json();
+      toast(d.ok ? 'Hall pinned (±' + Math.round(best.acc) + ' m)' : (d.error || 'Failed')); refresh();
+    } catch (e) { toast('Pin failed — check server'); }
+  };
+  const stopAt = setTimeout(done, 15000);
+  watch = navigator.geolocation.watchPosition(p => {
+    if (!best || p.coords.accuracy < best.acc) {
+      best = { lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy };
+    }
+    b.textContent = '📍 Locating… ±' + Math.round(best.acc) + ' m';
+    if (best.acc <= 20) { clearTimeout(stopAt); done(); }
+  }, err => {
+    if (err.code === 1 || !best) { clearTimeout(stopAt); done(); }
+  }, { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 });
+});
+$('unpinHall').addEventListener('click', async () => {
+  try { await adminPost('/admin/set-hall', {}); toast('Hall unpinned'); refresh(); }
+  catch (e) { toast('Unpin failed — check server'); }
 });
 
 refresh();

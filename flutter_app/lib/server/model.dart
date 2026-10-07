@@ -14,6 +14,8 @@ class ServerConfig {
   Set<String> roster = {};
   bool geofence = false;
   double auditRadiusKm = 2.0;
+  /// Hall centre pinned by the admin; null = median of precise fixes.
+  (double, double)? hall;
   String pageSecret = '';
   int throttleN = 15;
   int throttleWindow = 20;
@@ -33,6 +35,14 @@ class ServerConfig {
     return '${safe.isEmpty ? 'Session' : safe}_$stamp';
   }
 }
+
+/// [lat, lng] (journal form) -> record; anything else -> null.
+(double, double)? hallFromJson(Object? v) =>
+    v is List && v.length == 2 && v[0] is num && v[1] is num
+        ? ((v[0] as num).toDouble(), (v[1] as num).toDouble())
+        : null;
+
+List<double>? hallToJson((double, double)? h) => h == null ? null : [h.$1, h.$2];
 
 class Store {
   final List<Rec> records = [];
@@ -137,6 +147,9 @@ class Journal {
         config.courseName = e['course'] as String;
         config.startedAt = DateTime.parse(e['started_at'] as String);
         config.ended = false;
+        if (e.containsKey('hall')) config.hall = hallFromJson(e['hall']);
+      case 'hall':
+        config.hall = hallFromJson(e['hall']);
       case 'created':
         final rec = Map<String, Object?>.from(e['rec'] as Map);
         store.addRecord(rec);

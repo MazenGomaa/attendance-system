@@ -128,12 +128,38 @@ def device_tag(device_id: str) -> str:
     return hashlib.sha256(device_id.encode()).hexdigest()[:8]
 
 
+# Fixes with a wider error circle than this are coarse network guesses (cell
+# tower / Wi-Fi): they don't decide where the hall is, and they can't prove a
+# student is outside it.
+PRECISE_ACC_M = 100
+
+
 def hall_center(rows):
-    """Median of all GPS points: robust to a minority of remote cheaters."""
-    pts = [(r["lat"], r["lng"]) for r in rows if _is_num(r.get("lat")) and _is_num(r.get("lng"))]
+    """Median of the precise GPS points (all points if none are precise):
+    robust to a minority of remote cheaters and to coarse indoor fixes."""
+    pts = [(r["lat"], r["lng"], r.get("acc")) for r in rows
+           if _is_num(r.get("lat")) and _is_num(r.get("lng"))]
+    precise = [p for p in pts if _is_num(p[2]) and 0 < p[2] <= PRECISE_ACC_M]
+    pts = precise or pts
     if not pts:
         return None, None
     return median(p[0] for p in pts), median(p[1] for p in pts)
+
+
+def current_hall(rows):
+    """The pinned hall location if the admin set one, else the median."""
+    if config.hall:
+        return config.hall
+    return hall_center(rows)
+
+
+def location_check(d_km, acc, radius_km) -> str:
+    """'' inside, 'out' when even the nearest edge of the fix's error circle is
+    outside the radius, 'low' when only an imprecise fix puts it outside."""
+    if d_km <= radius_km:
+        return ""
+    a = acc if _is_num(acc) and acc > 0 else 0
+    return "out" if d_km * 1000 - a > radius_km * 1000 else "low"
 
 
 def _cell(v) -> str:
@@ -240,15 +266,17 @@ def _audit_csv(rows, base):
     """
     SWARM AUDIT + DEVICE-SHARING DETECTION.
 
-    1) Location: the lecture hall is the MEDIAN of all coordinates (robust to a
-       minority of remote cheaters). Flag anyone beyond config.audit_radius_km.
+    1) Location: the lecture hall is the pinned location or the MEDIAN of the
+       precise fixes (robust to a minority of remote cheaters). Out of bounds
+       only when the whole error circle is beyond config.audit_radius_km;
+       a coarse fix that merely might be outside is "Low accuracy".
     2) Same-device detection: multiple submissions (different IDs) from ONE IP
        suggest someone registering absent friends. Flagged, not auto-rejected,
        because students on mobile data can legitimately share a carrier/CGNAT IP.
     """
     audit_path = os.path.join(EXPORT_DIR, f"{base}_Audited.csv")
     same_ip, same_name = _shared_ip_ids(rows), _same_name_ids(rows)
-    hall_lat, hall_lng = hall_center(rows)
+    hall_lat, hall_lng = current_hall(rows)
 
     # Spatial grid for O(n) near-duplicate GPS detection (was O(n²)).
     # Each cell is ~8 m; we check the 3×3 neighbourhood so no pair is missed.
@@ -261,15 +289,17 @@ def _audit_csv(rows, base):
             gps_grid.setdefault((gx, gy), []).append(r)
 
     def near_duplicate_gps(r):
-        """True if a *different* student's record sits within ~8 m (likely same phone)."""
-        if not _is_num(r.get("lat")):
+        """True if a *different* student on the same IP sits within ~8 m (one
+        phone or hotspot registering friends). Same spot alone means nothing in a
+        lecture hall: indoor fixes snap to the same few points."""
+        if not _is_num(r.get("lat")) or not r.get("ip"):
             return False
         gx = int(r["lat"] / _CELL_DEG)
         gy = int(r["lng"] / _CELL_DEG)
         for dx in (-1, 0, 1):
             for dy in (-1, 0, 1):
                 for o in gps_grid.get((gx + dx, gy + dy), []):
-                    if o is r or o["id"] == r["id"]:
+                    if o is r or o["id"] == r["id"] or o.get("ip") != r.get("ip"):
                         continue
                     if haversine_km(r["lat"], r["lng"], o["lat"], o["lng"]) * 1000 <= 8:
                         return True
@@ -291,8 +321,11 @@ def _audit_csv(rows, base):
             if _is_num(lat) and hall_lat is not None:
                 d = haversine_km(hall_lat, hall_lng, lat, lng)
                 dist = round(d, 3)
-                if d > config.audit_radius_km:
+                where = location_check(d, acc, config.audit_radius_km)
+                if where == "out":
                     notes.append("Out of bounds")
+                elif where == "low":
+                    notes.append(f"Low accuracy (±{round(acc)} m)")
             else:
                 dist = ""
                 notes.append("No GPS")
@@ -322,6 +355,8 @@ def _audit_csv(rows, base):
             ])
 
     center = f"~({hall_lat:.5f}, {hall_lng:.5f})" if hall_lat is not None else "n/a (no GPS)"
+    if config.hall:
+        center += " (pinned)"
     print(f"[audit] hall center {center} | radius {config.audit_radius_km} km | "
           f"flagged {flagged}/{len(rows)} -> {audit_path}")
     return audit_path
@@ -861,32 +896,59 @@ async def admin_state(request: Request):
     if not _check_admin(request):
         return reject("unauthorized", 401)
     rows = store.records
-    hall_lat, hall_lng = hall_center(rows) if config.geofence else (None, None)
+    hall_lat, hall_lng = current_hall(rows) if config.geofence else (None, None)
 
-    def dist_km(r):
+    def where(r):
+        """(distance_km, '' | 'out' | 'low') or (None, '') without a location."""
         if hall_lat is None or not _is_num(r.get("lat")):
-            return None
-        return haversine_km(hall_lat, hall_lng, r["lat"], r["lng"])
+            return None, ""
+        d = haversine_km(hall_lat, hall_lng, r["lat"], r["lng"])
+        return d, location_check(d, r.get("acc"), config.audit_radius_km)
 
-    out_of_bounds = sum(1 for r in rows
-                        if (d := dist_km(r)) is not None and d > config.audit_radius_km)
+    checks = [where(r)[1] for r in rows]
     shared_ip = sum(len(v) for v in store.ip_to_rids.values() if len(v) > 1)
     recent = []
     for r in rows[-30:][::-1]:
-        d = dist_km(r)
+        d, w = where(r)
         recent.append({"name": r["name"], "id": r["id"], "timestamp": r["timestamp"],
                        "edited": bool(r.get("edited_at")),
                        "gps": _is_num(r.get("lat")),
+                       "acc": round(r["acc"]) if _is_num(r.get("acc")) else None,
                        "dist_m": None if d is None else round(d * 1000),
-                       "out": d is not None and d > config.audit_radius_km,
+                       "out": w == "out", "low": w == "low",
                        "shared_ip": len(store.ip_to_rids.get(r.get("ip"), [])) > 1})
     return JSONResponse({"course": config.course_name, "session_id": config.session_id(),
                          "count": len(rows), "devices": len(store.id_to_rid),
                          "ip_tracking": config.ip_tracking, "geofence": config.geofence,
                          "audit_radius_km": config.audit_radius_km,
-                         "out_of_bounds": out_of_bounds, "shared_ip": shared_ip,
+                         "hall": list(config.hall) if config.hall else None,
+                         "out_of_bounds": checks.count("out"),
+                         "low_accuracy": checks.count("low"), "shared_ip": shared_ip,
                          "submissions": len(store.log),
                          "merges": store.events[-30:][::-1], "recent": recent})
+
+
+@_route("/admin/set-hall", "POST")
+async def admin_set_hall(request: Request):
+    """Pin the hall to a location (the admin's phone, in the room), or clear
+    the pin with {} to go back to the median of the students' fixes."""
+    if not _check_admin(request):
+        return reject("unauthorized", 401)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    lat, lng = data.get("lat"), data.get("lng")
+    if lat is None and lng is None:
+        config.hall = None
+        return JSONResponse({"ok": True, "hall": None})
+    if not (_is_num(lat) and _is_num(lng) and -90 <= lat <= 90 and -180 <= lng <= 180):
+        return reject("invalid location", 422)
+    config.hall = (float(lat), float(lng))
+    print(f"[hall] pinned to ({lat:.5f}, {lng:.5f})")
+    return JSONResponse({"ok": True, "hall": list(config.hall)})
 
 
 @_route("/admin/reset-devices", "POST")

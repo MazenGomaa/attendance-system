@@ -55,7 +55,8 @@ class ExportResult {
 }
 
 ExportResult writeExports(List<Rec> rows, List<Rec> log, String dir, String base,
-    {required bool geofence, required double radiusKm, String reason = 'export'}) {
+    {required bool geofence, required double radiusKm, (double, double)? hall,
+    String reason = 'export'}) {
   Directory(dir).createSync(recursive: true);
   final raw = '$dir/${base}_Raw.csv';
   _writeCsv(raw, const [
@@ -94,14 +95,15 @@ ExportResult writeExports(List<Rec> rows, List<Rec> log, String dir, String base
   stdout.writeln('[export:$reason] ${rows.length} students, ${log.length} submissions -> '
       '${base}_Final.csv, ${base}_Raw.csv');
 
-  final audit = geofence ? _audit(rows, dir, base, radiusKm) : null;
+  final audit = geofence ? _audit(rows, dir, base, radiusKm, hall) : null;
   return ExportResult(fin, raw, audit);
 }
 
-String _audit(List<Rec> rows, String dir, String base, double radiusKm) {
+String _audit(List<Rec> rows, String dir, String base, double radiusKm,
+    (double, double)? hall) {
   final path = '$dir/${base}_Audited.csv';
   final sameIp = _sharedIpIds(rows), sameName = _sameNameIds(rows);
-  final center = hallCenter(rows);
+  final center = hall ?? hallCenter(rows);
 
   // ~8 m grid for O(n) near-duplicate GPS detection (3x3 neighbourhood).
   const cellDeg = 0.008 / 111.0;
@@ -112,14 +114,16 @@ String _audit(List<Rec> rows, String dir, String base, double radiusKm) {
       grid.putIfAbsent(((lat / cellDeg).truncate(), (lng / cellDeg).truncate()), () => []).add(r);
     }
   }
+  // Same IP and within ~8 m: one phone or hotspot registering friends. Same
+  // spot alone means nothing in a lecture hall (indoor fixes snap together).
   bool nearDuplicate(Rec r) {
     final lat = r['lat'], lng = r['lng'];
-    if (lat is! num || lng is! num) return false;
+    if (lat is! num || lng is! num || ((r['ip'] as String?) ?? '').isEmpty) return false;
     final gx = (lat / cellDeg).truncate(), gy = (lng / cellDeg).truncate();
     for (var dx = -1; dx <= 1; dx++) {
       for (var dy = -1; dy <= 1; dy++) {
         for (final o in grid[(gx + dx, gy + dy)] ?? const <Rec>[]) {
-          if (identical(o, r) || o['id'] == r['id']) continue;
+          if (identical(o, r) || o['id'] == r['id'] || o['ip'] != r['ip']) continue;
           if (haversineKm(lat.toDouble(), lng.toDouble(), (o['lat'] as num).toDouble(),
                   (o['lng'] as num).toDouble()) * 1000 <= 8) {
             return true;
@@ -142,7 +146,9 @@ String _audit(List<Rec> rows, String dir, String base, double radiusKm) {
     if (lat is num && lng is num && center != null) {
       final d = haversineKm(center.$1, center.$2, lat.toDouble(), lng.toDouble());
       dist = pyRound3(d);
-      if (d > radiusKm) notes.add('Out of bounds');
+      final where = locationCheck(d, acc, radiusKm);
+      if (where == 'out') notes.add('Out of bounds');
+      if (where == 'low') notes.add('Low accuracy (±${_acc(acc)} m)');
     } else {
       notes.add('No GPS');
     }
