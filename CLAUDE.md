@@ -2,6 +2,15 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Project status (updated 2026-10-07)
+
+- **Python server** (`app.py`, Termux/PC): stable. Recent fixes: no silent overwrites (identity = device/cookie, else same ID + same name), full Raw history, Arabic-digit normalisation, shared `parse_roster()`.
+- **Android host app** (`flutter_app/`): Phases 0–3 done and merged (PRs #1–#3). Latest tested APK: GitHub pre-release `app-build-10`, on a Samsung S24 Ultra (Android 16): tunnels, swipe-away survival, crash resume, dashboard, new subject, pre-class check, link-change alerts, outage recovery. See `flutter_app/README.md` for phases and design notes.
+- **Next**: the user's real classroom test (Phase 4). Ask for the session's `_Raw.csv`, the app's Debug → "Copy all" report, and student complaints, then fix what they show.
+- **Pending decisions**: class-list import not yet tested on a phone (no list yet); app signing still uses the dev key in the repo (fine while the app is for the user only; before sharing the APK, move signing to a private key in GitHub secrets, since changing keys later forces reinstalls); no official `v1.0.0` release yet (planned after the classroom test).
+- **Rejected/deferred**: local Wi-Fi/hotspot mode (browsers block location on plain-HTTP pages; removed), device fingerprinting and rotating QR (not useful enough).
+- **Working with the user**: they test on their phone and paste Debug reports; builds come from CI (`.github/workflows/android-apk.yml`), which publishes `app-build-N` pre-releases (latest 5 kept). This cloud environment can't reach `dl.google.com`, so Android builds only happen in CI; the Flutter SDK can be fetched from storage.googleapis.com for `flutter analyze` / `flutter test`.
+
 ## Running the app
 
 ```bash
