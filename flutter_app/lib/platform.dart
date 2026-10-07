@@ -17,6 +17,10 @@ class HostPlatform {
   static Future<void> updateNotification(String text) =>
       _ch.invokeMethod('updateNotification', {'text': text});
 
+  /// Heads-up alert the professor must act on (separate from the ongoing one).
+  static Future<void> alert(String title, String text) =>
+      _ch.invokeMethod('alert', {'title': title, 'text': text});
+
   static Future<void> requestNotifications() => _ch.invokeMethod('requestNotifications');
 
   static Future<void> requestBatteryExemption() =>
@@ -36,6 +40,12 @@ class HostPlatform {
     if (m == null) return null;
     return (m['name'] as String, m['bytes'] as Uint8List);
   }
+
+  /// kind: "app", "notifications" or "brand"; returns what was opened.
+  static Future<String> openSettings(String kind) async =>
+      (await _ch.invokeMethod<String>('openSettings', {'kind': kind})) ?? 'none';
+
+  static Future<void> openUrl(String url) => _ch.invokeMethod('openUrl', {'url': url});
 
   static Future<Map<String, Object?>> deviceInfo() async {
     final m = await _ch.invokeMapMethod<String, Object?>('deviceInfo');

@@ -103,6 +103,36 @@ class HostService : Service() {
                 .build()
         }
 
+        const val ALERT_CHANNEL_ID = "alerts"
+        const val ALERT_ID = 2
+
+        /** A heads-up alert (sound/vibration) for things the professor must act
+         *  on now, e.g. a student link that changed. */
+        fun alert(context: Context, title: String, text: String) {
+            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+                nm.getNotificationChannel(ALERT_CHANNEL_ID) == null) {
+                nm.createNotificationChannel(NotificationChannel(
+                    ALERT_CHANNEL_ID, "Session alerts", NotificationManager.IMPORTANCE_HIGH))
+            }
+            val open = PendingIntent.getActivity(context, 1,
+                Intent(context, MainActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+            val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                Notification.Builder(context, ALERT_CHANNEL_ID) else
+                @Suppress("DEPRECATION") Notification.Builder(context)
+                    .setPriority(Notification.PRIORITY_HIGH)
+            nm.notify(ALERT_ID, builder
+                .setContentTitle(title)
+                .setContentText(text)
+                .setStyle(Notification.BigTextStyle().bigText(text))
+                .setSmallIcon(android.R.drawable.stat_notify_error)
+                .setAutoCancel(true)
+                .setContentIntent(open)
+                .build())
+        }
+
         fun update(context: Context, text: String) {
             if (!running) return
             val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager

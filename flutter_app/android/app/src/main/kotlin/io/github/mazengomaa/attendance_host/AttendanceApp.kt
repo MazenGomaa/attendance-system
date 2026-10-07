@@ -62,6 +62,11 @@ class AttendanceApp : Application() {
                             HostService.update(this, call.argument<String>("text") ?: "")
                             result.success(true)
                         }
+                        "alert" -> {
+                            HostService.alert(this, call.argument<String>("title") ?: "",
+                                call.argument<String>("text") ?: "")
+                            result.success(true)
+                        }
                         "requestNotifications" -> {
                             val a = currentActivity
                             if (a != null && Build.VERSION.SDK_INT >= 33 &&
@@ -88,6 +93,14 @@ class AttendanceApp : Application() {
                             call.argument<String>("path")!!,
                             call.argument<String>("mime") ?: "text/csv"))
                         "pickTextFile" -> pickTextFile(result)
+                        "openSettings" -> result.success(
+                            openSettings(call.argument<String>("kind") ?: "app"))
+                        "openUrl" -> {
+                            startActivity(Intent(Intent.ACTION_VIEW,
+                                Uri.parse(call.argument<String>("url")))
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                            result.success(true)
+                        }
                         "deviceInfo" -> result.success(deviceInfo())
                         else -> result.notImplemented()
                     }
@@ -96,6 +109,57 @@ class AttendanceApp : Application() {
                 }
             }
         FlutterEngineCache.getInstance().put(ENGINE_ID, engine)
+    }
+
+    /**
+     * Opens a settings screen. kind: "app" (this app's info page),
+     * "notifications", or "brand" (the phone maker's own background/auto-start
+     * screen, which differs per brand and One UI/MIUI/ColorOS version: each
+     * known location is tried in turn, then the app info page). Returns which
+     * screen was opened.
+     */
+    private fun openSettings(kind: String): String {
+        fun tryStart(i: Intent): Boolean = try {
+            startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            true
+        } catch (e: Exception) {
+            false
+        }
+        val appInfo = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+            Uri.parse("package:$packageName"))
+        when (kind) {
+            "notifications" -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+                tryStart(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                    .putExtra(Settings.EXTRA_APP_PACKAGE, packageName))) return "notifications"
+            "brand" -> {
+                val m = Build.MANUFACTURER.lowercase()
+                val candidates = when {
+                    "samsung" in m -> listOf(
+                        "com.samsung.android.lool" to "com.samsung.android.sm.battery.ui.BatteryActivity",
+                        "com.samsung.android.lool" to "com.samsung.android.sm.ui.battery.BatteryActivity",
+                        "com.samsung.android.sm" to "com.samsung.android.sm.battery.ui.BatteryActivity")
+                    "xiaomi" in m || "redmi" in m || "poco" in m -> listOf(
+                        "com.miui.securitycenter" to "com.miui.permcenter.autostart.AutoStartManagementActivity")
+                    "oppo" in m || "realme" in m || "oneplus" in m -> listOf(
+                        "com.coloros.safecenter" to "com.coloros.safecenter.permission.startup.StartupAppListActivity",
+                        "com.coloros.safecenter" to "com.coloros.safecenter.startupapp.StartupAppListActivity",
+                        "com.oppo.safe" to "com.oppo.safe.permission.startup.StartupAppListActivity")
+                    "vivo" in m || "iqoo" in m -> listOf(
+                        "com.vivo.permissionmanager" to "com.vivo.permissionmanager.activity.BgStartUpManagerActivity",
+                        "com.iqoo.secure" to "com.iqoo.secure.ui.phoneoptimize.AddWhiteListActivity")
+                    "huawei" in m || "honor" in m -> listOf(
+                        "com.huawei.systemmanager" to "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity",
+                        "com.huawei.systemmanager" to "com.huawei.systemmanager.optimize.process.ProtectActivity")
+                    else -> emptyList()
+                }
+                for ((pkg, cls) in candidates) {
+                    if (tryStart(Intent().setComponent(android.content.ComponentName(pkg, cls)))) {
+                        return "brand"
+                    }
+                }
+            }
+        }
+        return if (tryStart(appInfo)) "app" else "none"
     }
 
     /** System file picker (no storage permission needed); answers with

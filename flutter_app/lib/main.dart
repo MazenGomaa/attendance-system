@@ -6,8 +6,10 @@ import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:share_plus/share_plus.dart';
 
+import 'background_guide.dart';
 import 'debug_log.dart';
 import 'platform.dart';
+import 'preflight_page.dart';
 import 'qr_image.dart';
 import 'server/logic.dart';
 import 'session.dart';
@@ -193,10 +195,58 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           ]),
         ),
         bottomNavigationBar: bottom,
-        body: TabBarView(children: [
-          ListView(padding: const EdgeInsets.all(16), children: [...header, ..._overview(st)]),
-          _studentsTab(st),
-          _logTab(),
+        body: Column(children: [
+          if (c.linksNeedSharing) _linksBanner(),
+          Expanded(
+            child: TabBarView(children: [
+              ListView(padding: const EdgeInsets.all(16), children: [...header, ..._overview(st)]),
+              _studentsTab(st),
+              _logTab(),
+            ]),
+          ),
+        ]),
+      ),
+    );
+  }
+
+  List<(String, String)> _currentLinks() => [
+        for (final t in c.tunnels?.tunnels ?? const <Tunnel>[])
+          if (t.url != null) (t.url!, 'Tunnel ${t.index}'),
+      ];
+
+  /// Red banner while students may be holding a dead QR code.
+  Widget _linksBanner() {
+    final changed = [
+      for (final t in c.tunnels?.tunnels ?? const <Tunnel>[])
+        if (t.linkChanged) 'Tunnel ${t.index}',
+    ];
+    final msg = c.resumedLinksPending
+        ? 'Session resumed with NEW student links. The old QR codes no longer work.'
+        : '${changed.join(', ')} restarted with a NEW link. Students with the old QR '
+            "can't submit.";
+    return Material(
+      color: Colors.red.shade800,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 8, 4),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            const Icon(Icons.warning_amber, color: Colors.white),
+            const SizedBox(width: 8),
+            Expanded(child: Text(msg, style: const TextStyle(color: Colors.white))),
+          ]),
+          Wrap(spacing: 4, children: [
+            TextButton.icon(
+              style: TextButton.styleFrom(foregroundColor: Colors.white),
+              icon: const Icon(Icons.share),
+              label: const Text('Share new QR'),
+              onPressed: () => shareQrs(_currentLinks()),
+            ),
+            TextButton(
+              style: TextButton.styleFrom(foregroundColor: Colors.white70),
+              onPressed: c.acknowledgeLinks,
+              child: const Text("Done, I've shared it"),
+            ),
+          ]),
         ]),
       ),
     );
@@ -302,6 +352,33 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             ]),
           ),
         ),
+      Card(
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('Before class', style: TextStyle(fontWeight: FontWeight.bold)),
+            const Text('Rehearse a session on the network you will use, and make sure '
+                'this phone keeps the app running with the screen off.',
+                style: TextStyle(fontSize: 13, color: Colors.white70)),
+            const SizedBox(height: 6),
+            Wrap(spacing: 8, children: [
+              FilledButton.tonalIcon(
+                icon: const Icon(Icons.fact_check),
+                label: const Text('Pre-class check'),
+                onPressed: () => Navigator.push(context, MaterialPageRoute(
+                    builder: (_) => PreflightPage(controller: c))),
+              ),
+              OutlinedButton.icon(
+                icon: const Icon(Icons.battery_saver),
+                label: const Text('Background settings'),
+                onPressed: () => Navigator.push(context, MaterialPageRoute(
+                    builder: (_) => const BackgroundGuidePage())),
+              ),
+            ]),
+          ]),
+        ),
+      ),
+      const SizedBox(height: 8),
       TextField(
         controller: _course,
         decoration: const InputDecoration(labelText: 'Course / subject name',
@@ -566,6 +643,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               SelectableText(t.url!, style: const TextStyle(color: Colors.lightBlueAccent)),
               _linkButtons(t.url!, 'Tunnel ${t.index}'),
             ],
+            if (t.linkChanged) const Text('NEW LINK: share this QR again',
+                style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
             if (t.restarts > 0) Text('restarted ${t.restarts}×',
                 style: const TextStyle(color: Colors.amber, fontSize: 12)),
             if (t.lastError != null && t.state != TunnelState.up)
