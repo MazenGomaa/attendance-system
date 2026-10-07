@@ -84,5 +84,6 @@ Three Python files do everything; no database, no migrations, no build pipeline.
 - **Roster file** (`roster.csv` or `roster.txt` in the project root; imported via a file picker in the app): optional; if present, only numeric IDs in it are accepted. First column, one per line, UTF-8-BOM safe, Arabic-Indic digits normalised, leading zeros ignored. Parsed by `parse_roster()` (`app.py`) / `parseRoster()` (Dart); `tests/roster_fixture.csv` + scenario mode `roster` keep them identical.
 - **Anti-curl page token**: HMAC signed by `config.page_secret` (generated fresh each run), valid for ~90 s (3 × 30 s buckets). `/submit` rejects requests without one.
 - **Admin password** stored as `sha256(salt + pw)` and compared with `hmac.compare_digest`. Salt and hash live only in `config` (memory) for the run.
+- **No location hints to students**: the student page and `/submit` replies never show accuracy, distance or in/out status (that would teach cheaters what to fake); those appear only on the admin side and in exports.
 - **Arabic name validation**: 4+ whitespace-separated tokens, each matching `[؀-ۿ]+`, max 100 chars total.
 - **Student IDs**: Arabic-Indic/Persian digits are normalised to ASCII (`normalize_digits`) before validation, on the page and in both servers.

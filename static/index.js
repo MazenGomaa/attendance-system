@@ -61,7 +61,7 @@ function finishLocation() {
   if (!geoBest) return;
   coords = { lat: geoBest.lat, lng: geoBest.lng, acc: geoBest.acc };
   geo.className = 'geo ok';
-  geo.textContent = '✅ تم تأكيد الموقع (±' + Math.round(geoBest.acc) + ' م) — يمكنك التسجيل الآن.';
+  geo.textContent = '✅ تم تأكيد الموقع — يمكنك التسجيل الآن.';
   liveCheck();
 }
 function locationError(code) {
@@ -97,8 +97,10 @@ function requestLocation() {
           (geoBest.stale === r.stale && r.acc < geoBest.acc)) geoBest = r;
       if (!geoBest.stale && geoBest.acc > 0 && geoBest.acc <= GEO_GOOD_M) { finishLocation(); return; }
       if (!settleSet) { settleSet = true; geoTimers.push(setTimeout(finishLocation, GEO_SETTLE_MS)); }
+      // Deliberately no accuracy or distance on screen: the page must not hint
+      // whether a location looks right, or how to make it look right.
       geo.className = 'geo loading';
-      geo.textContent = '📍 جارٍ تحسين دقة الموقع… ±' + Math.round(geoBest.acc) + ' م';
+      geo.textContent = '📍 جارٍ تحديد الموقع…';
     },
     err => {
       if (geoDone) return;
