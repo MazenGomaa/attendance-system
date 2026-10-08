@@ -64,6 +64,17 @@ class Store {
     ridIndex[r['rid'] as String] = r;
   }
 
+  /// Drop a record and every index entry pointing at it; returns it.
+  Rec? removeRecord(String rid) {
+    final r = ridIndex.remove(rid);
+    if (r == null) return null;
+    records.removeWhere((x) => identical(x, r));
+    if (idToRid[r['id']] == rid) idToRid.remove(r['id']);
+    clientToRid.removeWhere((_, v) => v == rid);
+    dropIp(r['ip'] as String?, rid);
+    return r;
+  }
+
   void addIp(String? ip, String rid) {
     if (ip == null || ip.isEmpty) return;
     final l = ipToRids.putIfAbsent(ip, () => []);
@@ -165,6 +176,10 @@ class Journal {
         store.addRecord(rec);
         store.idToRid[rec['id'] as String] = rec['rid'] as String;
         store.log.add(Map<String, Object?>.from(e['log'] as Map));
+      case 'removed':
+        store.removeRecord(e['rid'] as String);
+        store.log.add(Map<String, Object?>.from(e['log'] as Map));
+        store.events.add(Map<String, Object?>.from(e['event'] as Map));
       case 'updated':
         final rid = e['rid'] as String;
         final rec = store.get(rid);

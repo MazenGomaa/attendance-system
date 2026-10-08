@@ -14,7 +14,7 @@ function adminPost(url, body) {
 
 const KIND_PILL = {
   'same student': 'ok', 'ID corrected': 'ok', 'name corrected': 'ok',
-  'different student': 'warn', 'refused: ID in use': 'err',
+  'different student': 'warn', 'refused: ID in use': 'err', 'removed': 'err',
 };
 
 function fmtDist(m) {
@@ -56,8 +56,9 @@ async function refresh() {
       + `<td>${esc(x.id)}</td><td>${esc(x.timestamp).replace('T',' ')}</td>`
       + `<td class="${x.out?'out':x.low?'low':''}">${esc(fmtDist(x.dist_m))}`
       + `${x.acc!=null?' <small>±'+esc(x.acc)+' m</small>':''}`
-      + `${x.out?' ⚠ out':x.low?' ⚠ low accuracy':''}</td></tr>`).join('')
-      || '<tr><td colspan="4" class="empty">No submissions yet.</td></tr>';
+      + `${x.out?' ⚠ out':x.low?' ⚠ low accuracy':''}</td>`
+      + `<td><button class="rm" data-id="${esc(x.id)}" data-name="${esc(x.name)}">Remove</button></td></tr>`).join('')
+      || '<tr><td colspan="5" class="empty">No submissions yet.</td></tr>';
 
     const m = d.merges;
     $('merges').innerHTML = m.length ? m.map(e => {
@@ -65,7 +66,7 @@ async function refresh() {
       const pill = `<span class="pill ${KIND_PILL[kind] || 'warn'}">${esc(kind)}</span>`;
       return `<tr><td>${esc(e.time).replace('T',' ')}</td>`
         + `<td class="ar">${esc(e.old_id)} · ${esc(e.old_name)}</td>`
-        + `<td class="ar">${esc(e.new_id)} · ${esc(e.new_name)}</td>`
+        + `<td class="ar">${e.new_id ? esc(e.new_id) + ' · ' + esc(e.new_name) : '—'}</td>`
         + `<td>${esc(e.ip)}</td><td>${esc(fmtDist(e.dist_m))}</td><td>${pill}</td></tr>`;
     }).join('') : '<tr><td colspan="6" class="empty">No edits or conflicts yet.</td></tr>';
   } catch (e) {}
@@ -168,6 +169,18 @@ $('addForm').addEventListener('submit', async ev => {
     if (d.ok) { $('addId').value = ''; $('addName').value = ''; $('addId').focus(); refresh(); }
   } catch (e) { toast('Add failed — check server'); }
   finally { $('addBtn').disabled = false; }
+});
+
+// Remove a student (added by mistake, or a fake entry); kept in the Raw log.
+$('rows').addEventListener('click', async ev => {
+  const b = ev.target.closest('button.rm');
+  if (!b) return;
+  if (!confirm('Remove ' + b.dataset.id + ' · ' + b.dataset.name + '?\n\n'
+      + 'They disappear from the Final CSV; the Raw log keeps a "removed" row.')) return;
+  try {
+    const d = await (await adminPost('/admin/remove-student', { id: b.dataset.id })).json();
+    toast(d.ok ? d.message : (d.error || 'Remove failed')); refresh();
+  } catch (e) { toast('Remove failed — check server'); }
 });
 
 refresh();

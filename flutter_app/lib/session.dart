@@ -179,6 +179,16 @@ class HostController extends ChangeNotifier {
     return reply;
   }
 
+  /// Remove a student's record. Returns the server's reply.
+  Map<String, Object?> removeStudent(String id) {
+    final srv = server;
+    if (srv == null) return {'ok': false, 'error': 'No session running'};
+    final (_, reply) = srv.removeStudent(id);
+    log('app', 'remove student $id: ${reply['ok'] == true ? 'removed' : reply['error']}');
+    notifyListeners();
+    return reply;
+  }
+
   /// Pin the hall to a location (this phone, in the room), or null to go back
   /// to the median of the students' fixes.
   void setHall((double, double)? hall, {double? acc}) {

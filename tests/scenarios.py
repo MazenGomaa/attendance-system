@@ -283,6 +283,27 @@ def run_password_mode(base):
     r = Client(base, "41.8.8.8").submit("dev-manual01", "1007", NAMES["youssef"])
     check("manual student submits later -> update", r.json().get("mode") == "updated", r.text)
 
+    # 9c) Instructor removes a student; the history keeps it
+    check("remove-student without header -> 403",
+          adm.post("/admin/remove-student", {"id": "1007"}).status == 403)
+    check("remove-student unknown ID -> 404",
+          adm.admin_post("/admin/remove-student", {"id": "4242"}).status == 404)
+    r = adm.admin_post("/admin/remove-student", {"id": "١٠٠٧"})
+    check("remove-student removes", r.status == 200 and r.json().get("ok"), r.text)
+    st = adm.get("/admin/state").json()
+    check("removed: 5 students, gone from the list",
+          st.get("count") == 5 and all(x["id"] != "1007" for x in st.get("recent", [])), st)
+    check("removed: shown in the edit log",
+          any(m.get("kind") == "removed" and m.get("old_id") == "1007" for m in st.get("merges", [])))
+    r = Client(base, "41.8.8.8").post("/api/init", {"deviceId": "dev-manual01"})
+    check("removed: the device no longer prefills", r.json().get("record") is None, r.text)
+    raw = rows(adm.get("/admin/download?file=raw"))
+    check("Raw: removed row kept", raw[-1]["Action"] == "removed" and raw[-1]["ID"] == "1007", raw[-1])
+    check("Final: removed student absent",
+          all(x["ID"] != "1007" for x in rows(adm.get("/admin/download?file=final"))))
+    r = adm.admin_post("/admin/add-student", {"id": "1007", "name": NAMES["youssef"]})
+    check("removed ID can be added again", r.json().get("mode") == "created", r.text)
+
     # 10) Security headers, limits, static
     r = adm.get("/")
     csp = r.headers.get("content-security-policy", "")

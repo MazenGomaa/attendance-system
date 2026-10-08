@@ -72,6 +72,22 @@ class Store:
         self.records.append(r)
         self.rid_index[r["rid"]] = r
 
+    def remove_record(self, rid):
+        """Drop a record and every index entry pointing at it; returns it."""
+        r = self.rid_index.pop(rid, None)
+        if r is None:
+            return None
+        for i, x in enumerate(self.records):
+            if x is r:
+                del self.records[i]
+                break
+        if self.id_to_rid.get(r["id"]) == rid:
+            del self.id_to_rid[r["id"]]
+        for k in [k for k, v in self.client_to_rid.items() if v == rid]:
+            del self.client_to_rid[k]
+        self.drop_ip(r.get("ip"), rid)
+        return r
+
     def add_ip(self, ip, rid):
         if ip:
             self.ip_to_rids.setdefault(ip, [])

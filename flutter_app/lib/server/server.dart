@@ -211,6 +211,7 @@ class AttendanceServer {
       '/admin': {'GET': () async => _adminPage(req)},
       '/admin/state': {'GET': () async => _adminState(req)},
       '/admin/add-student': {'POST': () async => _adminAddStudent(req, body!)},
+      '/admin/remove-student': {'POST': () async => _adminRemoveStudent(req, body!)},
       '/admin/reset-devices': {'POST': () async => _adminResetDevices(req)},
       '/admin/set-hall': {'POST': () async => _adminSetHall(req, body!)},
       '/admin/new-session': {'POST': () async => _adminNewSession(req, body!)},
@@ -759,6 +760,33 @@ class AttendanceServer {
     if (!_checkAdmin(req)) return _reject('unauthorized', 401);
     final data = _jsonBody(body) ?? const {};
     final (status, reply) = addStudent('${data['id'] ?? ''}', '${data['name'] ?? ''}');
+    return _json(reply, status);
+  }
+
+  /// Remove a student's record (added by mistake, or a fake entry). Kept in
+  /// the Raw history and the edit log. Returns (HTTP status, reply).
+  (int, Map<String, Object?>) removeStudent(String rawId) {
+    if (config.ended) return (410, {'ok': false, 'error': 'Attendance is closed'});
+    final sid = normalizeDigits(rawId.trim());
+    final rid = store.idToRid[sid];
+    if (rid == null || store.get(rid) == null) {
+      return (404, {'ok': false, 'error': 'No student with ID $sid'});
+    }
+    final now = isoSeconds(DateTime.now());
+    final r = store.removeRecord(rid)!;
+    final ip = (r['ip'] as String?) ?? '';
+    _log('removed', 'instructor', rid, r['name'] as String, r['id'] as String, null,
+        (r['lat'] as num?)?.toDouble(), (r['lng'] as num?)?.toDouble(),
+        (r['acc'] as num?)?.toDouble(), ip, '', now, note: 'removed by the instructor');
+    final ev = _event('removed', now, r['id'] as String, r['name'] as String, '', '', ip);
+    _journal?.write({'op': 'removed', 'rid': rid, 'log': store.log.last, 'event': ev});
+    return (200, {'ok': true, 'message': 'Removed $sid'});
+  }
+
+  _Reply _adminRemoveStudent(HttpRequest req, List<int> body) {
+    if (!_checkAdmin(req)) return _reject('unauthorized', 401);
+    final data = _jsonBody(body) ?? const {};
+    final (status, reply) = removeStudent('${data['id'] ?? ''}');
     return _json(reply, status);
   }
 

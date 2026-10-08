@@ -367,6 +367,17 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     );
   }
 
+  /// Tap a student: remove them (added by mistake, or a fake entry).
+  Future<void> _removeStudent(String id, String name) async {
+    if (!await _confirm('Remove this student?',
+        '$id · $name\n\nThey disappear from the Final CSV. The Raw log keeps a '
+        '"removed" row, and the Log tab shows it.', 'Remove')) {
+      return;
+    }
+    final r = c.removeStudent(id);
+    _toast('${r['ok'] == true ? r['message'] : r['error']}');
+  }
+
   /// The web dashboard in the phone's browser. "localhost" (not 127.0.0.1) so
   /// the browser treats it as secure and allows location for "Pin hall".
   Future<void> _openAdmin() async {
@@ -663,6 +674,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                   final out = x['out'] == true, low = x['low'] == true;
                   return ListTile(
                     dense: true,
+                    onTap: () => _removeStudent('${x['id']}', '${x['name']}'),
                     title: Text('${x['name']}', textDirection: TextDirection.rtl),
                     subtitle: Text('${x['id']} · ${'${x['timestamp']}'.substring(11)}'
                         '${x['edited'] == true ? ' · edited' : ''}'
@@ -697,7 +709,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         final e = events[i];
         final kind = '${e['kind']}';
         final color = switch (kind) {
-          'refused: ID in use' => Colors.redAccent,
+          'refused: ID in use' || 'removed' => Colors.redAccent,
           'different student' => Colors.amber,
           _ => Colors.greenAccent,
         };
@@ -706,7 +718,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           leading: Icon(Icons.circle, size: 12, color: color),
           title: Text(kind, style: TextStyle(color: color, fontWeight: FontWeight.bold)),
           subtitle: Text('Was: ${e['old_id']} · ${e['old_name']}\n'
-              'Now: ${e['new_id']} · ${e['new_name']}\n'
+              'Now: ${'${e['new_id']}'.isEmpty ? '—' : '${e['new_id']} · ${e['new_name']}'}\n'
               '${'${e['time']}'.replaceFirst('T', ' ')} · ${e['ip']}'
               '${e['dist_m'] == null ? '' : ' · moved ${_dist(e['dist_m'] as int?)}'}'),
           isThreeLine: true,

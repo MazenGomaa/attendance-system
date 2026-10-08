@@ -45,6 +45,8 @@
                   background:var(--panel); color:var(--fg); font-family:inherit; min-width:0; }
   .addrow #addId { flex:0 1 140px; }
   .addrow #addName { flex:1 1 240px; direction:rtl; }
+  button.rm { padding:4px 8px; font-size:.75rem; color:var(--mut); }
+  button.rm:hover { border-color:var(--err); color:var(--err); }
   button.end { background:#3a1418; border-color:var(--err); color:var(--err); font-weight:700; }
   button.end:hover { background:var(--err); color:#fff; }
   .ended { background:var(--panel); border:1px solid var(--err); border-radius:12px;
@@ -108,7 +110,7 @@
 
   <h2>Recent submissions <span class="hint">(last 30 · distance from the hall, ± fix accuracy)</span></h2>
   <table>
-    <thead><tr><th>Name</th><th>ID</th><th>Time</th><th>Distance</th></tr></thead>
+    <thead><tr><th>Name</th><th>ID</th><th>Time</th><th>Distance</th><th></th></tr></thead>
     <tbody id="rows"></tbody>
   </table>
 </div>

@@ -64,6 +64,8 @@ void main() {
     expect((await a.submit('1009', 'محمد احمد علي حسن'))['mode'], 'updated');
     expect((await c.submit('1002', 'خالد يوسف عمر احمد'))['ok'], false);   // refused
     expect(s1.addStudent('1004', 'يوسف عمر خالد محمود').$2['mode'], 'created');   // no phone
+    expect(s1.addStudent('1005', 'خالد يوسف عمر احمد').$2['mode'], 'created');
+    expect(s1.removeStudent('1005').$1, 200);   // added by mistake
     s1.resetDevices();
     s1.setHall((30.05, 31.24));
     // "Crash": no export, no clean shutdown.
@@ -79,8 +81,9 @@ void main() {
     expect(s2.store.records.map((r) => r['id']), ['1009', '1002', '1004']);
     expect(s2.store.records.last['manual'], isTrue);
     expect(s2.store.records.first['edited_at'], isNotNull);
-    expect(s2.store.log.map((e) => e['action']), ['created', 'created', 'updated', 'refused', 'created']);
-    expect(s2.store.events.map((e) => e['kind']), ['ID corrected', 'refused: ID in use']);
+    expect(s2.store.log.map((e) => e['action']), ['created', 'created', 'updated', 'refused', 'created', 'created', 'removed']);
+    expect(s2.store.events.map((e) => e['kind']),
+        ['ID corrected', 'refused: ID in use', 'removed']);
     expect(s2.store.idToRid.keys.toSet(), {'1009', '1002', '1004'});
     expect(s2.addStudent('1004', 'يوسف عمر خالد محمود').$2['mode'], 'exists');
     expect(s2.store.clientToRid, isEmpty);   // the reset was replayed too

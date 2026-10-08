@@ -1006,6 +1006,39 @@ async def admin_add_student(request: Request):
     return JSONResponse(body, status_code=status)
 
 
+def remove_student(sid: str):
+    """Remove a student's record (added by mistake, or a fake entry). Kept in
+    the Raw history and the edit log. Returns (status, reply)."""
+    if config.ended:
+        return 410, {"ok": False, "error": "Attendance is closed"}
+    sid = normalize_digits(sid.strip())
+    rid = store.id_to_rid.get(sid)
+    if rid is None or store.get(rid) is None:
+        return 404, {"ok": False, "error": f"No student with ID {sid}"}
+    now = datetime.now().isoformat(timespec="seconds")
+    with admin_lock:
+        r = store.remove_record(rid)
+        _log("removed", "instructor", rid, r["name"], r["id"], None,
+             r.get("lat"), r.get("lng"), r.get("acc"), r.get("ip") or "", "", now,
+             note="removed by the instructor")
+        _event("removed", now, r["id"], r["name"], "", "", r.get("ip") or "")
+    return 200, {"ok": True, "message": f"Removed {sid}"}
+
+
+@_route("/admin/remove-student", "POST")
+async def admin_remove_student(request: Request):
+    if not _check_admin(request):
+        return reject("unauthorized", 401)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    status, body = remove_student(str(data.get("id", "")))
+    return JSONResponse(body, status_code=status)
+
+
 @_route("/admin/reset-devices", "POST")
 async def admin_reset_devices(request: Request):
     if not _check_admin(request):
