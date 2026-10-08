@@ -168,6 +168,17 @@ class HostController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Add a student who has no working phone. Returns the server's reply
+  /// ({ok, mode, message} or {ok: false, error}).
+  Map<String, Object?> addStudent(String id, String name) {
+    final srv = server;
+    if (srv == null) return {'ok': false, 'error': 'No session running'};
+    final (_, reply) = srv.addStudent(id, name);
+    log('app', 'add student $id: ${reply['ok'] == true ? reply['mode'] : reply['error']}');
+    notifyListeners();
+    return reply;
+  }
+
   /// Pin the hall to a location (this phone, in the room), or null to go back
   /// to the median of the students' fixes.
   void setHall((double, double)? hall, {double? acc}) {

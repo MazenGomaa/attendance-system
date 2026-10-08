@@ -221,7 +221,7 @@ def _write_final(rows, log, base):
         w = csv.writer(f)
         w.writerow(["Name", "ID", "Submitted_At", "Last_Updated", "Edits",
                     "Latitude", "Longitude", "Accuracy_m", "Maps_Link",
-                    "IP", "SameIP_Count", "SameIP_IDs", "SameName_IDs"])
+                    "IP", "SameIP_Count", "SameIP_IDs", "SameName_IDs", "Added_Manually"])
         for r in rows:
             ips, names = same_ip(r), same_name(r)
             w.writerow([
@@ -232,6 +232,7 @@ def _write_final(rows, log, base):
                 "" if r.get("acc") is None else round(r["acc"]),
                 maps_link(r.get("lat"), r.get("lng")),
                 r.get("ip", ""), len(ips) + 1, " ".join(ips), " ".join(names),
+                "yes" if r.get("manual") else "",
             ])
     return path
 
@@ -269,7 +270,8 @@ def _audit_csv(rows, base):
     1) Location: the lecture hall is the pinned location or the MEDIAN of the
        precise fixes (robust to a minority of remote cheaters). Out of bounds
        only when the whole error circle is beyond config.audit_radius_km;
-       a coarse fix that merely might be outside is "Low accuracy".
+       a coarse fix that merely might be outside is "Low accuracy". Students
+       the instructor added by hand have no location: "Added manually".
     2) Same-device detection: multiple submissions (different IDs) from ONE IP
        suggest someone registering absent friends. Flagged, not auto-rejected,
        because students on mobile data can legitimately share a carrier/CGNAT IP.
@@ -326,6 +328,9 @@ def _audit_csv(rows, base):
                     notes.append("Out of bounds")
                 elif where == "low":
                     notes.append(f"Low accuracy (±{round(acc)} m)")
+            elif r.get("manual"):
+                dist = ""
+                notes.append("added manually")
             else:
                 dist = ""
                 notes.append("No GPS")
@@ -339,7 +344,9 @@ def _audit_csv(rows, base):
             if _is_num(lat) and (acc is None or acc == 0):
                 notes.append("no accuracy (possible spoof)")
 
-            if notes:
+            if notes == ["added manually"]:
+                status = "Added manually"
+            elif notes:
                 status = ("FLAGGED: " if ("Out of bounds" in notes or "No GPS" in notes)
                           else "SUSPECT: ") + ", ".join(notes)
                 flagged += 1
@@ -579,7 +586,7 @@ def _log(action, match, rid, name, sid, prev, lat, lng, acc, ip, device_id, now,
         "rid": rid, "name": name, "id": sid,
         "prev_name": prev["name"] if prev else "", "prev_id": prev["id"] if prev else "",
         "lat": lat, "lng": lng, "acc": acc, "ip": ip,
-        "device": device_tag(device_id), "note": note,
+        "device": device_tag(device_id) if device_id else "", "note": note,
     })
 
 
@@ -912,7 +919,7 @@ async def admin_state(request: Request):
         d, w = where(r)
         recent.append({"name": r["name"], "id": r["id"], "timestamp": r["timestamp"],
                        "edited": bool(r.get("edited_at")),
-                       "gps": _is_num(r.get("lat")),
+                       "gps": _is_num(r.get("lat")), "manual": bool(r.get("manual")),
                        "acc": round(r["acc"]) if _is_num(r.get("acc")) else None,
                        "dist_m": None if d is None else round(d * 1000),
                        "out": w == "out", "low": w == "low",
@@ -949,6 +956,54 @@ async def admin_set_hall(request: Request):
     config.hall = (float(lat), float(lng))
     print(f"[hall] pinned to ({lat:.5f}, {lng:.5f})")
     return JSONResponse({"ok": True, "hall": list(config.hall)})
+
+
+def add_manual(sid: str, raw_name: str):
+    """A student with no phone (or a dead one), added by the instructor.
+    Same ID/name/roster rules as /submit; no device, IP or location. An ID
+    already present with the same name is left as is; with another name it is
+    refused. Returns (status, reply)."""
+    if config.ended:
+        return 410, {"ok": False, "error": "Attendance is closed"}
+    sid = normalize_digits(sid.strip())
+    if not valid_id(sid):
+        return 422, {"ok": False, "error": "Invalid student ID"}
+    if config.roster and (sid.lstrip("0") or "0") not in config.roster:
+        return 403, {"ok": False, "error": "This ID is not on the class list"}
+    ok_name, name = valid_name(raw_name.strip())
+    if not ok_name:
+        return 422, {"ok": False, "error": "Enter the full 4-part Arabic name"}
+
+    # No await from here on (same atomicity as /submit).
+    owner = store.get(store.id_to_rid.get(sid))
+    if owner is not None:
+        if name_key(owner["name"]) == name_key(name):
+            return 200, {"ok": True, "mode": "exists",
+                         "message": f"{sid} is already registered"}
+        return 409, {"ok": False, "error": f"ID {sid} is already registered as {owner['name']}"}
+    now = datetime.now().isoformat(timespec="seconds")
+    rid = uuid.uuid4().hex
+    store.add_record({"rid": rid, "name": name, "id": sid, "timestamp": now,
+                      "edited_at": None, "lat": None, "lng": None, "acc": None,
+                      "ip": "", "manual": True})
+    store.id_to_rid[sid] = rid
+    _log("created", "manual", rid, name, sid, None, None, None, None, "", "", now,
+         note="added by the instructor")
+    return 200, {"ok": True, "mode": "created", "message": f"Added {sid}"}
+
+
+@_route("/admin/add-student", "POST")
+async def admin_add_student(request: Request):
+    if not _check_admin(request):
+        return reject("unauthorized", 401)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    status, body = add_manual(str(data.get("id", "")), str(data.get("name", "")))
+    return JSONResponse(body, status_code=status)
 
 
 @_route("/admin/reset-devices", "POST")

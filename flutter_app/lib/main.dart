@@ -188,6 +188,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               tooltip: 'Session actions',
               onSelected: _sessionAction,
               itemBuilder: (_) => [
+                const PopupMenuItem(value: 'add', child: Text('Add student manually…')),
                 const PopupMenuItem(value: 'admin', child: Text('Open admin page in browser')),
                 const PopupMenuItem(value: 'export', child: Text('Export & share CSVs now')),
                 const PopupMenuItem(value: 'reset', child: Text('Reset for a new take')),
@@ -301,6 +302,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           final exported = await c.newSubject(name.text);
           _toast('Saved $exported');
         }
+      case 'add':
+        await _addStudent();
       case 'admin':
         await _openAdmin();
       case 'hall':
@@ -309,6 +312,59 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         c.setHall(null);
         _toast("Hall unpinned: using the students' median again");
     }
+  }
+
+  /// A student with no phone (or a dead one): the instructor types their ID
+  /// and name. The dialog stays open on errors and after each add, so several
+  /// students can be entered in a row.
+  Future<void> _addStudent() async {
+    final id = TextEditingController(), name = TextEditingController();
+    final idFocus = FocusNode();
+    String? error, done;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setD) {
+        void add() {
+          final r = c.addStudent(id.text, name.text);
+          setD(() {
+            if (r['ok'] == true) {
+              error = null;
+              done = '${r['message']}';
+              id.clear();
+              name.clear();
+              idFocus.requestFocus();
+            } else {
+              error = '${r['error']}';
+              done = null;
+            }
+          });
+        }
+        return AlertDialog(
+          title: const Text('Add student manually'),
+          content: Column(mainAxisSize: MainAxisSize.min, children: [
+            const Text('For a student with no phone or a dead battery. They are marked '
+                '"added manually" in the dashboard and the CSVs.',
+                style: TextStyle(fontSize: 13, color: Colors.white70)),
+            TextField(controller: id, focusNode: idFocus, autofocus: true,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(labelText: 'Student ID')),
+            TextField(controller: name, textDirection: TextDirection.rtl,
+                textInputAction: TextInputAction.done, onSubmitted: (_) => add(),
+                decoration: const InputDecoration(labelText: 'Full name (4 parts, Arabic)')),
+            if (error != null)
+              Padding(padding: const EdgeInsets.only(top: 8),
+                  child: Text(error!, style: const TextStyle(color: Colors.redAccent))),
+            if (done != null)
+              Padding(padding: const EdgeInsets.only(top: 8),
+                  child: Text(done!, style: const TextStyle(color: Colors.greenAccent))),
+          ]),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Done')),
+            FilledButton(onPressed: add, child: const Text('Add')),
+          ],
+        );
+      }),
+    );
   }
 
   /// The web dashboard in the phone's browser. "localhost" (not 127.0.0.1) so
@@ -574,18 +630,27 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         '${x['id']}'.contains(q) || nameKey('${x['name']}').contains(nameKey(q))).toList();
     return Column(children: [
       Padding(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-        child: TextField(
-          controller: _search,
-          onChanged: (_) => _redraw(),
-          decoration: InputDecoration(
-            prefixIcon: const Icon(Icons.search),
-            hintText: 'Search name or ID (${all.length})',
-            suffixIcon: _search.text.isEmpty ? null : IconButton(
-                icon: const Icon(Icons.clear),
-                onPressed: () => setState(_search.clear)),
+        padding: const EdgeInsets.fromLTRB(16, 8, 8, 0),
+        child: Row(children: [
+          Expanded(
+            child: TextField(
+              controller: _search,
+              onChanged: (_) => _redraw(),
+              decoration: InputDecoration(
+                prefixIcon: const Icon(Icons.search),
+                hintText: 'Search name or ID (${all.length})',
+                suffixIcon: _search.text.isEmpty ? null : IconButton(
+                    icon: const Icon(Icons.clear),
+                    onPressed: () => setState(_search.clear)),
+              ),
+            ),
           ),
-        ),
+          IconButton(
+            tooltip: 'Add student manually',
+            icon: const Icon(Icons.person_add),
+            onPressed: _addStudent,
+          ),
+        ]),
       ),
       Expanded(
         child: rows.isEmpty
@@ -602,7 +667,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                     subtitle: Text('${x['id']} · ${'${x['timestamp']}'.substring(11)}'
                         '${x['edited'] == true ? ' · edited' : ''}'
                         '${x['shared_ip'] == true ? ' · shared IP' : ''}'
-                        '${geo && x['gps'] != true ? ' · no GPS' : ''}'),
+                        '${x['manual'] == true ? ' · added manually' : ''}'
+                        '${geo && x['gps'] != true && x['manual'] != true ? ' · no GPS' : ''}'),
                     trailing: geo
                         ? Text(_dist(x['dist_m'] as int?) +
                                 (x['acc'] != null ? '\n±${x['acc']} m' : '') +

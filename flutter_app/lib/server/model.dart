@@ -160,6 +160,11 @@ class Journal {
         store.addIp(rec['ip'] as String?, rid);
         if (config.ipTracking && rec['ip'] != null) store.seenIps.add(rec['ip'] as String);
         store.log.add(Map<String, Object?>.from(e['log'] as Map));
+      case 'manual':
+        final rec = Map<String, Object?>.from(e['rec'] as Map);
+        store.addRecord(rec);
+        store.idToRid[rec['id'] as String] = rec['rid'] as String;
+        store.log.add(Map<String, Object?>.from(e['log'] as Map));
       case 'updated':
         final rid = e['rid'] as String;
         final rec = store.get(rid);

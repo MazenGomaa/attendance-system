@@ -63,6 +63,7 @@ void main() {
     expect((await b.submit('1002', 'سارة محمود علي حسن'))['mode'], 'created');
     expect((await a.submit('1009', 'محمد احمد علي حسن'))['mode'], 'updated');
     expect((await c.submit('1002', 'خالد يوسف عمر احمد'))['ok'], false);   // refused
+    expect(s1.addStudent('1004', 'يوسف عمر خالد محمود').$2['mode'], 'created');   // no phone
     s1.resetDevices();
     s1.setHall((30.05, 31.24));
     // "Crash": no export, no clean shutdown.
@@ -75,11 +76,13 @@ void main() {
     final s2 = _server(dir, journal, cfg2);
     expect(s2.resumeFromJournal(), isTrue);
     expect(cfg2.courseName, 'Journal test');
-    expect(s2.store.records.map((r) => r['id']), ['1009', '1002']);
+    expect(s2.store.records.map((r) => r['id']), ['1009', '1002', '1004']);
+    expect(s2.store.records.last['manual'], isTrue);
     expect(s2.store.records.first['edited_at'], isNotNull);
-    expect(s2.store.log.map((e) => e['action']), ['created', 'created', 'updated', 'refused']);
+    expect(s2.store.log.map((e) => e['action']), ['created', 'created', 'updated', 'refused', 'created']);
     expect(s2.store.events.map((e) => e['kind']), ['ID corrected', 'refused: ID in use']);
-    expect(s2.store.idToRid.keys.toSet(), {'1009', '1002'});
+    expect(s2.store.idToRid.keys.toSet(), {'1009', '1002', '1004'});
+    expect(s2.addStudent('1004', 'يوسف عمر خالد محمود').$2['mode'], 'exists');
     expect(s2.store.clientToRid, isEmpty);   // the reset was replayed too
     expect(cfg2.hall, (30.05, 31.24));        // and the pinned hall
 

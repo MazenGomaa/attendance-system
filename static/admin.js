@@ -51,6 +51,7 @@ async function refresh() {
 
     $('rows').innerHTML = d.recent.map(x =>
       `<tr><td class="ar">${esc(x.name)}${x.edited?' <span style="color:#ffb020">✎</span>':''}${x.gps?' 📍':''}`
+      + `${x.manual?' <span class="pill ok">added manually</span>':''}`
       + `${x.shared_ip?' <span class="pill warn">shared IP</span>':''}</td>`
       + `<td>${esc(x.id)}</td><td>${esc(x.timestamp).replace('T',' ')}</td>`
       + `<td class="${x.out?'out':x.low?'low':''}">${esc(fmtDist(x.dist_m))}`
@@ -153,6 +154,20 @@ $('pinHall').addEventListener('click', () => {
 $('unpinHall').addEventListener('click', async () => {
   try { await adminPost('/admin/set-hall', {}); toast('Hall unpinned'); refresh(); }
   catch (e) { toast('Unpin failed — check server'); }
+});
+
+// A student without a working phone, added by the instructor.
+$('addForm').addEventListener('submit', async ev => {
+  ev.preventDefault();
+  const id = $('addId').value.trim(), name = $('addName').value.trim();
+  if (!id || !name) { toast('Enter the ID and the full name'); return; }
+  $('addBtn').disabled = true;
+  try {
+    const d = await (await adminPost('/admin/add-student', { id, name })).json();
+    toast(d.ok ? d.message : (d.error || 'Add failed'));
+    if (d.ok) { $('addId').value = ''; $('addName').value = ''; $('addId').focus(); refresh(); }
+  } catch (e) { toast('Add failed — check server'); }
+  finally { $('addBtn').disabled = false; }
 });
 
 refresh();

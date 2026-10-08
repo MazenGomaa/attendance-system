@@ -40,6 +40,11 @@
   .hallrow button { padding:8px 12px; }
   .hint { color:var(--mut); font-size:.75rem; }
   .empty { color:var(--mut); font-size:.85rem; padding:8px 0; }
+  .addrow { display:flex; flex-wrap:wrap; gap:8px; }
+  .addrow input { padding:10px 12px; border:1px solid var(--line); border-radius:8px;
+                  background:var(--panel); color:var(--fg); font-family:inherit; min-width:0; }
+  .addrow #addId { flex:0 1 140px; }
+  .addrow #addName { flex:1 1 240px; direction:rtl; }
   button.end { background:#3a1418; border-color:var(--err); color:var(--err); font-weight:700; }
   button.end:hover { background:var(--err); color:#fff; }
   .ended { background:var(--panel); border:1px solid var(--err); border-radius:12px;
@@ -87,6 +92,13 @@
     <button class="danger" id="newsess">New subject…</button>
     <button class="end" id="endsess">⏹ End session</button>
   </div>
+
+  <h2>Add a student manually <span class="hint">(no phone or a dead battery)</span></h2>
+  <form class="addrow" id="addForm">
+    <input id="addId" inputmode="numeric" placeholder="Student ID" autocomplete="off">
+    <input id="addName" placeholder="الاسم الرباعي" autocomplete="off">
+    <button type="submit" id="addBtn">＋ Add</button>
+  </form>
 
   <h2>⚠️ Edits and refused ID conflicts (review for cheating)</h2>
   <table>

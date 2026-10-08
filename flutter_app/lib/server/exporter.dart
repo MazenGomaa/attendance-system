@@ -83,6 +83,7 @@ ExportResult writeExports(List<Rec> rows, List<Rec> log, String dir, String base
   _writeCsv(fin, const [
     'Name', 'ID', 'Submitted_At', 'Last_Updated', 'Edits', 'Latitude', 'Longitude',
     'Accuracy_m', 'Maps_Link', 'IP', 'SameIP_Count', 'SameIP_IDs', 'SameName_IDs',
+    'Added_Manually',
   ], rows.map((r) {
     final ips = sameIp(r), names = sameName(r);
     return [
@@ -90,6 +91,7 @@ ExportResult writeExports(List<Rec> rows, List<Rec> log, String dir, String base
       (r['edited_at'] as String?) ?? '', '${edits[r['rid']] ?? 0}',
       _opt(r['lat']), _opt(r['lng']), _acc(r['acc']), mapsLink(r['lat'], r['lng']),
       (r['ip'] as String?) ?? '', '${ips.length + 1}', ips.join(' '), names.join(' '),
+      r['manual'] == true ? 'yes' : '',
     ];
   }));
   stdout.writeln('[export:$reason] ${rows.length} students, ${log.length} submissions -> '
@@ -149,6 +151,8 @@ String _audit(List<Rec> rows, String dir, String base, double radiusKm,
       final where = locationCheck(d, acc, radiusKm);
       if (where == 'out') notes.add('Out of bounds');
       if (where == 'low') notes.add('Low accuracy (±${_acc(acc)} m)');
+    } else if (r['manual'] == true) {
+      notes.add('added manually');
     } else {
       notes.add('No GPS');
     }
@@ -159,6 +163,8 @@ String _audit(List<Rec> rows, String dir, String base, double radiusKm,
     if (lat is num && (acc == null || acc == 0)) notes.add('no accuracy (possible spoof)');
     final status = notes.isEmpty
         ? 'Valid'
+        : notes.length == 1 && notes.first == 'added manually'
+        ? 'Added manually'
         : '${notes.contains('Out of bounds') || notes.contains('No GPS') ? 'FLAGGED: ' : 'SUSPECT: '}'
             '${notes.join(', ')}';
     return [

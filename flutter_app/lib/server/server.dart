@@ -210,6 +210,7 @@ class AttendanceServer {
       '/admin/login': {'POST': () async => _adminLogin(req, body!)},
       '/admin': {'GET': () async => _adminPage(req)},
       '/admin/state': {'GET': () async => _adminState(req)},
+      '/admin/add-student': {'POST': () async => _adminAddStudent(req, body!)},
       '/admin/reset-devices': {'POST': () async => _adminResetDevices(req)},
       '/admin/set-hall': {'POST': () async => _adminSetHall(req, body!)},
       '/admin/new-session': {'POST': () async => _adminNewSession(req, body!)},
@@ -364,7 +365,7 @@ class AttendanceServer {
       'rid': rid, 'name': name, 'id': sid,
       'prev_name': prev?['name'] ?? '', 'prev_id': prev?['id'] ?? '',
       'lat': lat, 'lng': lng, 'acc': acc, 'ip': ip,
-      'device': deviceTag(deviceId), 'note': note,
+      'device': deviceId.isEmpty ? '' : deviceTag(deviceId), 'note': note,
     });
   }
 
@@ -640,7 +641,7 @@ class AttendanceServer {
     final acc = r['acc'];
     return {
       'name': r['name'], 'id': r['id'], 'timestamp': r['timestamp'],
-      'edited': r['edited_at'] != null, 'gps': r['lat'] is num,
+      'edited': r['edited_at'] != null, 'gps': r['lat'] is num, 'manual': r['manual'] == true,
       'acc': acc is num ? pyRound(acc.toDouble()) : null,
       'dist_m': d == null ? null : pyRound(d * 1000),
       'out': w == 'out', 'low': w == 'low',
@@ -715,6 +716,50 @@ class AttendanceServer {
     }
     setHall((lat.toDouble(), lng.toDouble()));
     return _json({'ok': true, 'hall': hallToJson(config.hall)});
+  }
+
+  /// A student with no phone (or a dead one), added by the instructor. Same
+  /// ID/name/roster rules as /submit; no device, IP or location. An ID already
+  /// present with the same name is left as is; with another name it is
+  /// refused. Returns (HTTP status, reply).
+  (int, Map<String, Object?>) addStudent(String rawId, String rawName) {
+    if (config.ended) return (410, {'ok': false, 'error': 'Attendance is closed'});
+    final sid = normalizeDigits(rawId.trim());
+    if (!validId(sid)) return (422, {'ok': false, 'error': 'Invalid student ID'});
+    final rosterKey = sid.replaceFirst(RegExp(r'^0+'), '');
+    if (config.roster.isNotEmpty &&
+        !config.roster.contains(rosterKey.isEmpty ? '0' : rosterKey)) {
+      return (403, {'ok': false, 'error': 'This ID is not on the class list'});
+    }
+    final (okName, name) = validName(rawName.trim());
+    if (!okName) return (422, {'ok': false, 'error': 'Enter the full 4-part Arabic name'});
+
+    final owner = store.get(store.idToRid[sid]);
+    if (owner != null) {
+      if (nameKey(owner['name'] as String) == nameKey(name)) {
+        return (200, {'ok': true, 'mode': 'exists', 'message': '$sid is already registered'});
+      }
+      return (409, {'ok': false, 'error': 'ID $sid is already registered as ${owner['name']}'});
+    }
+    final now = isoSeconds(DateTime.now());
+    final rid = randomHex();
+    final rec = <String, Object?>{
+      'rid': rid, 'name': name, 'id': sid, 'timestamp': now, 'edited_at': null,
+      'lat': null, 'lng': null, 'acc': null, 'ip': '', 'manual': true,
+    };
+    store.addRecord(rec);
+    store.idToRid[sid] = rid;
+    _log('created', 'manual', rid, name, sid, null, null, null, null, '', '', now,
+        note: 'added by the instructor');
+    _journal?.write({'op': 'manual', 'rec': rec, 'log': store.log.last});
+    return (200, {'ok': true, 'mode': 'created', 'message': 'Added $sid'});
+  }
+
+  _Reply _adminAddStudent(HttpRequest req, List<int> body) {
+    if (!_checkAdmin(req)) return _reject('unauthorized', 401);
+    final data = _jsonBody(body) ?? const {};
+    final (status, reply) = addStudent('${data['id'] ?? ''}', '${data['name'] ?? ''}');
+    return _json(reply, status);
   }
 
   _Reply _adminState(HttpRequest req) {

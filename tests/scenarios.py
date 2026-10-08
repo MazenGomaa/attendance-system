@@ -29,6 +29,7 @@ NAMES = {
     "sara": "سارة محمود علي حسن",
     "khaled": "خالد يوسف عمر احمد",
     "omar": "عمر خالد يوسف احمد",
+    "youssef": "يوسف عمر خالد محمود",
 }
 
 failures = 0
@@ -245,6 +246,43 @@ def run_password_mode(base):
     check("Audited: same spot alone is not a duplicate", st5 == "Valid", st5)
     check("download bad kind -> 400", adm.get("/admin/download?file=../x").status == 400)
 
+    # 9b) Instructor adds a student who has no phone
+    check("add-student without header -> 403",
+          adm.post("/admin/add-student", {"id": "1007", "name": NAMES["youssef"]}).status == 403)
+    check("add-student without login -> 401",
+          Client(base).admin_post("/admin/add-student",
+                                  {"id": "1007", "name": NAMES["youssef"]}).status == 401)
+    check("add-student bad ID -> 422",
+          adm.admin_post("/admin/add-student", {"id": "10x", "name": NAMES["youssef"]}).status == 422)
+    check("add-student 3-part name -> 422",
+          adm.admin_post("/admin/add-student", {"id": "1007", "name": "يوسف عمر خالد"}).status == 422)
+    r = adm.admin_post("/admin/add-student", {"id": "١٠٠٧", "name": NAMES["youssef"]})
+    check("add-student creates (Arabic-Indic digits)",
+          r.status == 200 and r.json().get("mode") == "created", r.text)
+    r = adm.admin_post("/admin/add-student", {"id": "1007", "name": NAMES["youssef"]})
+    check("add-student again, same name -> exists", r.json().get("mode") == "exists", r.text)
+    r = adm.admin_post("/admin/add-student", {"id": "1002", "name": NAMES["youssef"]})
+    check("add-student taken ID, other name -> 409", r.status == 409, r.text)
+    st = adm.get("/admin/state").json()
+    man = [x for x in st.get("recent", []) if x.get("id") == "1007"]
+    check("state: manual student listed, no GPS",
+          bool(man) and man[0]["manual"] and not man[0]["gps"], man)
+    check("state: 6 students, out_of_bounds still 1",
+          st.get("count") == 6 and st.get("out_of_bounds") == 1, st)
+    raw = rows(adm.get("/admin/download?file=raw"))
+    fin = rows(adm.get("/admin/download?file=final"))
+    aud = rows(adm.get("/admin/download?file=audited"))
+    check("Raw: manual row (match manual, no device)",
+          raw[-1]["Match"] == "manual" and raw[-1]["ID"] == "1007" and raw[-1]["Device"] == "",
+          raw[-1])
+    check("Final: Added_Manually column",
+          [x["ID"] for x in fin if x["Added_Manually"] == "yes"] == ["1007"], fin)
+    st7 = next((x["Status"] for x in aud if x["ID"] == "1007"), "")
+    check("Audited: manual student is 'Added manually', not flagged", st7 == "Added manually", st7)
+    # Later the student arrives with a phone: same ID + name updates the record
+    r = Client(base, "41.8.8.8").submit("dev-manual01", "1007", NAMES["youssef"])
+    check("manual student submits later -> update", r.json().get("mode") == "updated", r.text)
+
     # 10) Security headers, limits, static
     r = adm.get("/")
     csp = r.headers.get("content-security-policy", "")
@@ -264,7 +302,7 @@ def run_password_mode(base):
     r = a.submit("dev-aaaaaaaa", "1009", NAMES["mohamed"])
     check("after reset: same ID + name updates (no duplicate)",
           r.json().get("mode") == "updated", r.text)
-    check("after reset: still 5 students", adm.get("/admin/state").json().get("count") == 5)
+    check("after reset: still 6 students", adm.get("/admin/state").json().get("count") == 6)
 
     # 12) End session: closes attendance (server then shuts down)
     r = adm.admin_post("/admin/end-session")
@@ -302,6 +340,10 @@ def run_roster_mode(base):
     check("roster: ID not on the list -> 403", r.status == 403 and "class list" in r.text, r.text)
     r = Client(base, "41.7.7.11").submit("dev-roster05", "4004", NAMES["omar"])
     check("roster: spaces around the ID in the file are ignored", r.json().get("mode") == "created", r.text)
+    adm = Client(base)
+    adm.admin_post("/admin/login", {"pw": "pw"})
+    r = adm.admin_post("/admin/add-student", {"id": "9999", "name": NAMES["youssef"]})
+    check("roster: add-student off the list -> 403", r.status == 403, r.text)
 
 
 if __name__ == "__main__":
